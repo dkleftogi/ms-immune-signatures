@@ -1,0 +1,18 @@
+{
+  "title": "MS immune signatures",
+  "description": "R-based workflows for CyTOF preprocessing, harmonization, phenotyping, and immune signature discovery in multiple sclerosis.",
+  "creators": [
+    {
+      "name": "Kleftogiannis, Dimitrios",
+      "orcid": "0000-0003-1086-821X"
+    }
+  ],
+  "keywords": [
+    "multiple sclerosis",
+    "CyTOF",
+    "immunology",
+    "single-cell",
+    "immune signatures"
+  ],
+  "license": "MIT"
+}
