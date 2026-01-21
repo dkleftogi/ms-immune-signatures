@@ -1,0 +1,32 @@
+# R / RStudio
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+.Rprofile
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# R Markdown outputs
+*_cache/
+*_files/
+*.html
+
+# DATA (NEVER COMMIT)
+data/
+raw_data/
+processed_data/
+*.fcs
+*.fastq
+*.fq
+*.bam
+*.h5
+*.h5ad
+*.loom
+*.rds
+*.qs
+
+# Secrets
+.env
