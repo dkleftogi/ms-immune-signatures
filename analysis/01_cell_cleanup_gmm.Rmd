@@ -1,0 +1,71 @@
+---
+title: "CyTOF Cell Cleanup and CD45/CD66b GMM Gate"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+  pdf_document:
+    toc: true
+    toc_depth: '2'
+---
+
+### Contact
+
+Comments and bug reports are welcome, please email: Dimitrios Kleftogiannis (dimitrios.kleftogiannis@uib.no)
+
+We are also interested to know about how you have used our source code, including any improvements that you have implemented.
+ 
+You are free to modify, extend or distribute our source code, as long as our copyright notice remains unchanged and included in its entirety. 
+
+### License
+
+This code is licensed under the MIT License.
+
+Copyright 2026, University of Bergen (UiB) and Neuro-SysMed, Norway
+
+### Loading packages and setting up the environment
+```{r setup, message=FALSE, warning=FALSE}
+#SET YOUR WORKING DIR HERE
+
+source("R/cleanup_gmm.R")
+
+# EDIT PATHS FOR YOUR ENVIRONMENT (data should NOT be committed)
+input_dir  <- "data/raw_fcs"
+output_dir <- "outputs/cleanup"
+
+params <- default_cleanup_params()
+
+# Optional: set a different seed for exploration (keep fixed for reproducibility)
+params$seed <- 1
+
+```
+
+### Purpose
+
+This report performs CyTOF event cleanup following MaxPar/Fluidigm-style quality gates and then selects the CD45^high CD66b^low leukocyte population using a 2-component Gaussian Mixture Model (GMM). 
+Outputs include diagnostic plots and per-file QC summaries incuding the cleaned up fcs data in the output folder.
+
+Below is a minimal example code. It is highly recomended to run this code per barcode. Also consider adjusting the filtering parameters as the default might not be suitable for all barcode runs.
+
+### Run cleanup
+```{r cleanup, message=FALSE, warning=FALSE}
+res <- run_cleanup(input_dir, output_dir, params = params)
+```
+
+### QC summary (cells retained per step)
+```{r QC metrics, message=FALSE, warning=FALSE}
+knitr::kable(res$qc_summary)
+```
+
+### Cluster quality metrics (subset sampling)
+```{r clustering metrics, message=FALSE, warning=FALSE}
+knitr::kable(res$cluster_quality)
+
+```
+
+
+
+
+
+
+
