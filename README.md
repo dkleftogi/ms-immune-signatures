@@ -17,7 +17,11 @@ The project is funded by Helse Vest grant awarded to Dimitrios Kleftogiannis
 
 ## Description of codes and pipelines
 
-N/A
+1. Folder R/ contains main utility functions and codes for different parts of the analysis
+
+2. Folder scripts/ contains executable pipelines suitable for interactive analysis in RStudio
+
+3. Folder analysis/ contain command-line wrappers as well as markdown versions of the analysis 
 
 ## Data availability
 Any sharing of pseudonymized individual-level data will follow ethical, legal, and institutional requirements.
