@@ -1,0 +1,61 @@
+---
+title: "CyTOF harmonisation with cyCombine"
+output:
+  html_document:
+  toc: true
+  toc_depth: 2
+pdf_document:
+  toc: true
+  toc_depth: '2'
+---
+  
+### Contact
+  
+Comments and bug reports are welcome, please email: Dimitrios Kleftogiannis (dimitrios.kleftogiannis@uib.no)
+
+We are also interested to know about how you have used our source code, including any improvements that you have implemented.
+
+You are free to modify, extend or distribute our source code, as long as our copyright notice remains unchanged and included in its entirety. 
+
+### License
+
+This code is licensed under the MIT License.
+
+Copyright 2026, University of Bergen (UiB) and Neuro-SysMed, Norway
+
+### Loading packages and setting up the environment
+```{r setup, message=FALSE, warning=FALSE}
+#SET YOUR WORKING DIR HERE
+
+source("R/harmonise_cycombine.R")
+
+# EDIT PATHS FOR YOUR ENVIRONMENT (data should NOT be committed)
+input_dir    <- "outputs/cleanup/clean_fcs"               # ignored by git
+metadata_csv <- "metadata/metadata.csv"
+markers_file <- "metadata/panel_design.xlsx"
+output_dir   <- "outputs/cycombine"
+
+params <- default_cycombine_params()
+
+# Optional: set a different seed for exploration (keep fixed for reproducibility)
+params$seed <- 1
+```
+
+### Purpose
+
+This report performs CyTOF data harmonisation using the cyCombine method. 
+Outputs include diagnostic plots and QC summaries incuding the corrected data in the .rds format .
+
+Below is a minimal example code. 
+
+### Run harmonisation
+```{r harmonisation, message=FALSE, warning=FALSE}
+res <- run_cycombine_harmonisation(input_dir, metadata_csv, markers_file, output_dir, params)
+```
+
+
+
+
+
+
+
