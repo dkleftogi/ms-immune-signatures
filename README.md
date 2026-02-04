@@ -42,6 +42,7 @@ Copyright 2026 Department of Clinical Medicine (K1), University of Bergen (UiB) 
 
 You may only use the source code in this repository in compliance with the license provided in this repository. For more details, please refer to the file named "LICENSE.md".
 
-#### Releases
+#### History
 
 21-Jan-2026 : 01 part - CyTOF cleanup with filtering and GMMs
+4-Feb-2026. : 02 part - CyTOF harmonisation using cyCombine
