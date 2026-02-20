@@ -1,6 +1,10 @@
 # Assisting personalised treatment decisions in multiple sclerosis using data-driven immunological signatures  
 
-R-based workflows for CyTOF preprocessing, harmonization, phenotyping, and immune signature discovery in multiple sclerosis.
+R-based workflows for CyTOF preprocessing, harmonization, and immune signature discovery in multiple sclerosis.
+
+Additionally the repo hosts a pipeline to reproduce the analysis presented in our article titled:
+
+"Multi-modal immune profiling in progressive multiple sclerosis following intrathecal mesenchymal stem cell therapy
 
 ## Scope
 This repository contains analysis code and documentation only.
@@ -46,4 +50,6 @@ You may only use the source code in this repository in compliance with the licen
 
 21-Jan-2026 : 01 part - CyTOF cleanup with filtering and GMMs
 
-4-Feb-2026 : 02 part - CyTOF harmonisation using cyCombine
+4-Feb-2026  : 02 part - CyTOF harmonisation using cyCombine
+
+20-Feb-2026 : 03 part - SMART-MS omics paper analyses 

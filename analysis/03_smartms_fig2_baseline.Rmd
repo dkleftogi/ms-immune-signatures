@@ -1,0 +1,452 @@
+---
+title: "SMART-MS Figure 2 – Baseline immune landscape"
+author: "Dimitrios Kleftogiannis"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+editor_options:
+  chunk_output_type: inline
+---
+  
+### Contact
+  
+Comments and bug reports are welcome, please email: Dimitrios Kleftogiannis (dimitrios.kleftogiannis@uib.no)
+
+We are also interested to know about how you have used our source code, including any improvements that you have implemented.
+
+You are free to modify, extend or distribute our source code, as long as our copyright notice remains unchanged and included in its entirety. 
+
+### License
+
+This code is licensed under the MIT License.
+
+Copyright 2026, University of Bergen (UiB) and Neuro-SysMed, Norway
+
+
+### Initiation and parameters setup - EDITS NEEDED
+```{r}
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(umap)
+  library(RColorBrewer)
+  library(ComplexHeatmap)
+  library(circlize)
+})
+
+source("R/smartms_config.R")
+source("R/io_zenodo.R")
+
+# -----------------------------
+# Parameters (EDIT THESE)
+# -----------------------------
+params <- list(
+  # Direct download URL to Zenodo file that contains allCells_combined.RDa
+  # (Use the "Download" link for the file on Zenodo)
+  zenodo_url = "PASTE_ZENODO_DIRECT_DOWNLOAD_URL_HERE",
+
+  # Local cache path (ignored by git)
+  #data_path = "PASTE_LOCAL_DOWNLOAD_FILE_HERE",
+  data_path = '/Home/siv32/dkl081/Desktop/SMART/SMART_RAMMS_harmonised/allCells_combined.RDa',
+  
+  # Output base (ignored by git)
+  out_base = "outputs/SMARTMS_publication",
+
+  # Baseline definition for SMART-MS in your original notebook
+  cohort = "SMART",
+  baseline_timePoint = "V4",
+  baseline_label = "BL",
+
+  # Reproducibility + runtime
+  seed = 1,
+  umap_max_cells = 50000
+)
+
+# -----------------------------
+# Helpers
+# -----------------------------
+ensure_dir <- function(path) {
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+}
+
+download_if_missing <- function(url, dest_path) {
+  if (file.exists(dest_path)) return(invisible(dest_path))
+  ensure_dir(dirname(dest_path))
+  message("Downloading dataset from Zenodo...")
+  utils::download.file(url, destfile = dest_path, mode = "wb", quiet = FALSE)
+  message("Saved to: ", dest_path)
+  invisible(dest_path)
+}
+
+# Output directories for this figure
+dirs <- list(
+  figures = file.path(params$out_base, "figures", "fig2_baseline"),
+  tables  = file.path(params$out_base, "tables",  "fig2_baseline"),
+  qc      = file.path(params$out_base, "qc",      "fig2_baseline")
+)
+lapply(dirs, ensure_dir)
+
+# -----------------------------
+# Marker panel + plotting metadata (from your original notebook)
+# -----------------------------
+col.names <- c("CD16","CD4","CD14","CD19","CD3","CD235ab","CD11c","CD33",
+               "CD133","CD123","CD162","CD185","CD45RA","CD278","CD194","CD161",
+               "CD184","CD27","CD44","CD127","CD10","CD73","HLADR","CD146",
+               "CD117","CD8a","CD34","CD105","CD49d","CD20","CD25","CD66b",
+               "CD49f","CD45RO","CD90","CD45","CD195","CD38","CD196","CD135","CD56")
+
+all_cellType_order <- c('CD4_CM','CD4_EM','CD4_Naive','CD4_TEMRA','CD4_unclass',
+                        'CD8_CM','CD8_EM','CD8_Naive','CD8_TEMRA','CD8_unclass',
+                        'B_activ','B_Mem','B_Naive','B_CD34_hi','B_trans','B_pl',
+                        'NK_br_CD16_low','NK_br_CD16_hi','NK_dim_CD16_low','NK_dim_CD16_hi','NKT',
+                        'cDC','pDC',
+                        'Mono_classical','Mono_NonClassical')
+
+colors_all <- c('slategray1','slategray3','steelblue1','steelblue3','navy',
+                'magenta','hotpink2','darkorchid1','darkorchid3','darkmagenta',
+                'pink','firebrick1','firebrick3','indianred2','indianred3','red4',
+                'gold','orange','orange3','peachpuff','cyan3',
+                'darkslategrey','palegreen4',
+                'green','green3')
+
+cluster_annot <- data.frame(
+  CellType = all_cellType_order,
+  lineage = c('CD4_T','CD4_T','CD4_T','CD4_T','CD4_T',
+              'CD8_T','CD8_T','CD8_T','CD8_T','CD8_T',
+              'B','B','B','B','B','B',
+              'NK','NK','NK','NK','NK',
+              'DC','DC',
+              'Mono','Mono'),
+  stringsAsFactors = FALSE
+)
+
+lineage_levels <- c("CD4_T","CD8_T","B","NK","DC","Mono")
+lineage_colors <- c(
+  CD4_T = "#1f77b4",
+  CD8_T = "#9467bd",
+  B     = "#d62728",
+  NK    = "#ff7f0e",
+  DC    = "khaki3",
+  Mono  = "#2ca02c"
+)
+
+patientLevels_SMART = paste0("S", 1:18)
+set.seed(params$seed)
+```
+
+
+### Load cleaned CyTOF data (Zenodo → local)
+```{r}
+download_if_missing(params$zenodo_url, params$data_path)
+
+# This should load an object named: allCells
+load(params$data_path)
+stopifnot(exists("allCells"))
+
+# Robustness: handle CellType naming
+if (!("CellType" %in% colnames(allCells)) && ("cellType" %in% colnames(allCells))) {
+  allCells$CellType <- allCells$cellType
+}
+stopifnot(all(c("Cohort","Patient","timePoint","CellType") %in% colnames(allCells)))
+
+# Baseline SMART-MS subset (in case there are other time points or cohorts in the dataset)
+tmp <- allCells %>%
+  filter(Cohort == params$cohort, timePoint == params$baseline_timePoint) %>%
+  mutate(timePoint = params$baseline_label)
+
+tmp$CellType <- factor(tmp$CellType, levels = all_cellType_order)
+
+```
+
+Note on cell type annotation
+
+Cell type annotation was performed through an iterative workflow (Multiple rounds of FlowSOM plus expert manual curation using marker expression heatmaps cross-checked with results from ConsensusClusterPlus). 
+This curation step is not reproduced here.
+This notebook reproduces all downstream baseline analyses and plots starting from the curated CellType labels included in allCells.
+
+### Number of cells per phenotype at baseline
+```{r}
+  
+timePointCellType <- tmp %>%
+  group_by(CellType) %>%
+  summarise(samples = n(), .groups = "drop")
+
+p_supp1 <- ggplot(timePointCellType, aes(x = CellType, y = samples, fill = CellType)) +
+  geom_col(width = 0.28, color = "black", linewidth = 0.2) +
+  theme_bw() +
+  scale_fill_manual(values = colors_all) +
+  labs(y = "Number of cells at BL", x = NULL) +
+  theme(
+    legend.position = "none",
+    axis.title.y = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.text.x = element_text(angle = 90, size = 12, hjust = 0.95, vjust = 0.5),
+    axis.title.x = element_blank(),
+    aspect.ratio = 0.3
+  )
+
+ggsave(file.path(dirs$figures, "Supp_Figure_1_cells_per_phenotype_BL.pdf"),
+       p_supp1, width = 12, height = 5)
+  
+```
+
+
+
+### Baseline relative abundance per phenotype (per patient)
+```{r}
+
+counts <- tmp %>%
+  group_by(Patient, CellType) %>%
+  summarise(n = n(), .groups = "drop")
+
+totals <- tmp %>%
+  group_by(Patient) %>%
+  summarise(total_cells = n(), .groups = "drop")
+
+prop_df <- counts %>%
+  left_join(totals, by = "Patient") %>%
+  mutate(prop = n / total_cells)
+
+summary_df <- prop_df %>%
+  group_by(CellType) %>%
+  summarise(
+    median_prop = median(prop, na.rm = TRUE),
+    se_prop     = sd(prop, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+summary_df$CellType <- factor(summary_df$CellType, levels = all_cellType_order)
+prop_df$CellType <- factor(prop_df$CellType, levels = all_cellType_order)
+
+p_2d <- ggplot() +
+  geom_point(
+    data = summary_df,
+    aes(x = CellType, y = median_prop, fill = CellType),
+    shape = 21, size = 2, color = "black"
+  ) +
+  geom_errorbar(
+    data = summary_df,
+    aes(x = CellType, ymin = median_prop - se_prop, ymax = median_prop + se_prop),
+    width = 0.2
+  ) +
+  geom_point(
+    data = prop_df,
+    aes(x = CellType, y = prop, group = Patient),
+    position = position_jitter(width = 0.1),
+    alpha = 0.3,
+    size = 1,
+    color = "grey48"
+  ) +
+  coord_flip() +
+  scale_fill_manual(values = colors_all) +
+  labs(x = "", y = "Relative abundance",
+       title = "Baseline relative abundance per cell type and patient") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_line(linewidth = 0.2),
+    panel.grid.minor = element_blank(),
+    legend.position = "none"
+  )
+
+ggsave(file.path(dirs$figures, "Figure_2D.pdf"), p_2d, width = 10, height = 8)
+
+# Save summary table (useful for supplements)
+summary_iqr <- prop_df %>%
+  group_by(CellType) %>%
+  summarise(
+    median_prop = median(prop, na.rm = TRUE),
+    mean_prop   = mean(prop, na.rm = TRUE),
+    sd_prop     = sd(prop, na.rm = TRUE),
+    se_prop     = sd_prop / sqrt(n()),
+    iqr_prop    = IQR(prop, na.rm = TRUE),
+    .groups = "drop"
+  )
+write.csv(summary_iqr, file.path(dirs$tables, "baseline_abundance_summary.csv"), row.names = FALSE)
+
+```
+
+### Baseline lineage-level composition per patient
+```{r}
+prop_lineage <- prop_df %>%
+  left_join(cluster_annot, by = "CellType") %>%
+  group_by(Patient, lineage) %>%
+  summarise(prop_lineage = sum(prop, na.rm = TRUE), .groups = "drop")
+
+prop_lineage$lineage <- factor(prop_lineage$lineage, levels = lineage_levels)
+
+p_2c <- ggplot(prop_lineage, aes(x = Patient, y = prop_lineage, fill = lineage)) +
+  geom_col() +
+  scale_fill_manual(values = lineage_colors) +
+  labs(x = "Patient", y = "Relative abundance at baseline",
+       title = "Baseline lineage-level composition per patient") +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    aspect.ratio = 0.5
+  )
+
+ggsave(file.path(dirs$figures, "Figure_2C.pdf"), p_2c, width = 12, height = 5)
+
+```
+
+### UMAP baseline immune landscape (computed from allCells)
+Note that this UMAP might not be exactly the same as the one presented in the manuscript.
+```{r}
+
+missing_markers <- setdiff(col.names, colnames(tmp))
+if (length(missing_markers) > 0) {
+  stop("Missing marker columns in allCells: ", paste(missing_markers, collapse = ", "))
+}
+
+tmp_umap <- tmp
+if (nrow(tmp_umap) > params$umap_max_cells) {
+  set.seed(params$seed)
+  tmp_umap <- tmp_umap[sample(seq_len(nrow(tmp_umap)), params$umap_max_cells), ]
+}
+
+X <- as.matrix(tmp_umap[, col.names])
+
+set.seed(params$seed)
+u <- umap::umap(X)
+tmp_umap$UMAP1 <- u$layout[,1]
+tmp_umap$UMAP2 <- u$layout[,2]
+
+tmp_umap$CellType <- factor(tmp_umap$CellType, levels = all_cellType_order)
+
+p_2a <- ggplot(tmp_umap, aes(x = UMAP1, y = UMAP2, color = CellType)) +
+  geom_point(size = 0.4, alpha = 0.7) +
+  scale_color_manual(values = colors_all) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  guides(colour = guide_legend(override.aes = list(size = 3), title = "")) +
+  labs(title = "Baseline UMAP (SMART-MS)")
+
+ggsave(file.path(dirs$figures, "Figure_2A.pdf"), p_2a, width = 12, height = 9)
+
+
+
+```
+
+### Heatmap of median marker expression per phenotype (baseline)
+```{r}
+# ---- Figure 2B: Heatmap of mean marker expression per phenotype (baseline) ----
+# Faithful to original SMART-MS notebook, with optional 0–1 scaling for display.
+
+suppressPackageStartupMessages({
+  library(pheatmap)
+  library(RColorBrewer)
+})
+
+# ---------------------------
+# Optional display scaling
+# ---------------------------
+scale01_by_col <- TRUE   # <- switch ON/OFF here
+
+# Markers used for clustering/phenotyping (reduced panel)
+clustering_cols <- c("CD3","CD4","CD8a","CD45RA","CD45RO",
+                     "CD20","CD19","CD27","HLADR",
+                     "CD56","CD161",
+                     "CD127","CD34","CD38",
+                     "CD16","CD14","CD11c","CD123","CD33")
+
+# Baseline SMART-MS subset
+tmp_bl <- allCells %>%
+  dplyr::filter(Cohort == params$cohort,
+                timePoint == params$baseline_timePoint)
+
+# Ensure CellType ordering
+tmp_bl$CellType <- factor(tmp_bl$CellType, levels = all_cellType_order)
+
+# ---------------------------
+# Build heatmap matrix (MEAN expression)
+# ---------------------------
+heat_mat <- matrix(NA_real_,
+                   nrow = length(all_cellType_order),
+                   ncol = length(clustering_cols))
+
+rownames(heat_mat) <- all_cellType_order
+colnames(heat_mat) <- clustering_cols
+
+for (i in seq_along(all_cellType_order)) {
+  ct <- all_cellType_order[i]
+  temp_mat <- tmp_bl[tmp_bl$CellType == ct, clustering_cols, drop = FALSE]
+  heat_mat[i, ] <- apply(temp_mat, 2, function(x) mean(x, na.rm = TRUE))
+}
+
+# ---------------------------
+# OPTIONAL: scale markers to [0,1] (visual only)
+# ---------------------------
+if (isTRUE(scale01_by_col)) {
+
+  heat_mat <- apply(heat_mat, 2, function(x) {
+
+    rng <- range(x, na.rm = TRUE)
+
+    if (diff(rng) == 0) {
+      return(rep(0, length(x)))
+    }
+
+    (x - rng[1]) / diff(rng)
+  })
+
+  heat_mat <- as.matrix(heat_mat)
+}
+
+# ---------------------------
+# Row annotation (CellType + Lineage)
+# ---------------------------
+my_row_annot <- data.frame(CellType = rownames(heat_mat))
+my_row_annot$Lineage <- cluster_annot$lineage
+rownames(my_row_annot) <- rownames(heat_mat)
+
+# Annotation colors (same as original)
+my_colour <- list(
+  CellType = setNames(colors_all, all_cellType_order),
+  Lineage  = c(
+    CD4_T = "#1f77b4",
+    CD8_T = "#9467bd",
+    B     = "#d62728",
+    NK    = "#ff7f0e",
+    DC    = "khaki3",
+    Mono  = "#2ca02c"
+  )
+)
+
+# ---------------------------
+# Save heatmap to output folder
+# ---------------------------
+out_file <- file.path(dirs$figures, "Figure_2B.pdf")
+
+pheatmap::pheatmap(
+  heat_mat,
+  filename = out_file,
+  display_numbers = FALSE,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  annotation_row = my_row_annot,
+  annotation_colors = my_colour,
+  color = brewer.pal(9, "Greys"),
+  gaps_row = c(5,10,16,21,23),
+  gaps_col = c(5,9,10,13,15)
+)
+
+
+```
+
+### Reproducibility record
+```{r}
+writeLines(capture.output(str(params)), file.path(dirs$qc, "params_used.txt"))
+
+sink(file.path(dirs$qc, "sessionInfo.txt"))
+sessionInfo()
+sink()
+
+```
