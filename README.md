@@ -8,7 +8,7 @@ Additionally the repo hosts a pipeline to reproduce the analysis presented in ou
 
 ## Scope
 This repository contains analysis code and documentation only.
-No personal, sensitive, or patient-level data are included.
+No sensitive patient-level data are included.
 
 
 ## Publications
