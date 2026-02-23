@@ -1,0 +1,935 @@
+---
+title: "SMART-MS Figure 4 – Functional scores in blood"
+author: "Dimitrios Kleftogiannis"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+editor_options:
+  chunk_output_type: inline
+---
+  
+### Contact
+  
+Comments and bug reports are welcome, please email: Dimitrios Kleftogiannis (dimitrios.kleftogiannis@uib.no)
+
+We are also interested to know about how you have used our source code, including any improvements that you have implemented.
+
+You are free to modify, extend or distribute our source code, as long as our copyright notice remains unchanged and included in its entirety. 
+
+### License
+
+This code is licensed under the MIT License.
+
+Copyright 2026, University of Bergen (UiB) and Neuro-SysMed, Norway
+
+### Initiation and parameters setup - MAYBE EDITS ARE NEEDED FOR DIRS 
+```{r}
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(umap)
+  library(RColorBrewer)
+  library(ComplexHeatmap)
+  library(circlize)
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(lme4)
+  library(lmerTest)
+  library(patchwork)
+  library(ggrepel)
+})
+
+#EDIT HERE IF NEEDED - SET YOUR WORKING DIR APPROPRIATELY
+source("R/smartms_config.R")
+source("R/io_zenodo.R")
+#this is more elegant than before
+cfg <- get_smartms_config()
+# -----------------------------
+# Parameters (EDIT THESE)
+# -----------------------------
+col.names <- c("CD16","CD4","CD14","CD19","CD3","CD235ab","CD11c","CD33",
+                   "CD133","CD123","CD162","CD185","CD45RA","CD278","CD194","CD161",
+                   "CD184","CD27","CD44","CD127","CD10","CD73","HLADR","CD146",
+                   "CD117","CD8a","CD34","CD105","CD49d","CD20","CD25","CD66b",
+                   "CD49f","CD45RO","CD90","CD45","CD195","CD38","CD196","CD135","CD56")
+col.names.info <- c('type','type','type','type','type','state','type','type',
+                        'state','type','state','state','type','state','state','state',
+                        'state','state','state','state','state','state','type','state',
+                        'state','type','type','state','state','type','state','type',
+                        'state','type','state','type','state','type','state','state','type')
+
+params <- list(
+  # Direct download URL to Zenodo file that contains allCells_combined.RDa
+  # (Use the "Download" link for the file on Zenodo)
+  zenodo_url = "PASTE_ZENODO_DIRECT_DOWNLOAD_URL_HERE",
+
+  #EDIT HERE IF NEEDED
+  data_path = "PASTE_LOCAL_DOWNLOAD_FILE_HERE",
+  # example -> data_path = '/Home/siv32/dkl081/Desktop/SMART/SMART_RAMMS_harmonised/allCells_combined.RDa',
+  
+  #EDIT HERE IF NEEDED
+  out_base = "outputs/SMARTMS_publication",
+
+  # Baseline definition for SMART-MS in your original notebook
+  cohort = "SMART",
+  timepoints = c("V4","V8","V10"),
+  baseline_timePoint = "V4",
+  baseline_label = "BL",
+
+  # Reproducibility + runtime
+  seed = 1,
+  umap_max_cells = 50000,
+  umap_markers = cfg$col.names, 
+  
+  # Modelling settings
+  # cell type columns come from proportions (one per CellType)
+  p_adjust_method = "BH",
+  top_diag_n = 6  # number of top hits to show diagnostics
+)
+
+# -----------------------------
+# Helpers
+# -----------------------------
+ensure_dir <- function(path) {
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+}
+
+download_if_missing <- function(url, dest_path) {
+  if (file.exists(dest_path)) return(invisible(dest_path))
+  ensure_dir(dirname(dest_path))
+  message("Downloading dataset from Zenodo...")
+  utils::download.file(url, destfile = dest_path, mode = "wb", quiet = FALSE)
+  message("Saved to: ", dest_path)
+  invisible(dest_path)
+}
+
+# Output directories for this figure
+dirs <- list(
+  figures = file.path(params$out_base, "figures", "fig4"),
+  tables  = file.path(params$out_base, "tables",  "fig4"),
+  qc      = file.path(params$out_base, "qc",      "fig4")
+)
+lapply(dirs, ensure_dir)
+
+# Colors for time points (as in your original notebook)
+color_TimePoints <- c("deepskyblue2", "magenta2", "indianred2")
+names(color_TimePoints) <- params$timepoints
+
+set.seed(params$seed)
+```
+
+
+### Load cleaned CyTOF data (Zenodo → local)
+```{r}
+download_if_missing(params$zenodo_url, params$data_path)
+
+# This should load an object named: allCells
+load(params$data_path)
+stopifnot(exists("allCells"))
+
+# Robust naming
+if (!("CellType" %in% colnames(allCells)) && ("cellType" %in% colnames(allCells))) {
+  allCells$CellType <- allCells$cellType
+}
+
+# Required columns 
+required_cols <- c("Cohort","timePoint","Patient","CellType")
+missing_cols <- setdiff(required_cols, colnames(allCells))
+if (length(missing_cols) > 0) stop("Missing required columns in allCells: ", paste(missing_cols, collapse=", "))
+
+# Keep SMART only
+allCells <- allCells[allCells$Cohort == params$cohort, ]
+
+# --- Subset by visit
+tmp_V4  <- allCells[allCells$timePoint == "V4", ]
+tmp_V8  <- allCells[allCells$timePoint == "V8", ]
+tmp_V10 <- allCells[allCells$timePoint == "V10", ]
+
+```
+
+
+### Clinical design metadata 
+```{r}
+
+patientLevels_SMART <- cfg$patientLevels_SMART
+################################################### V4
+df_trial_V4 <- data.frame(Patient=patientLevels_SMART,
+                         Treatment=c('Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline','Baseline',
+                               'Baseline'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                       Period=c('0','0',
+                               '0','0',
+                               '0','0',
+                               '0','0','0',
+                               '0','0',
+                               '0',
+                               '0','0',
+                               '0','0','0',
+                               '0'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+tmp_V4 <- merge(tmp_V4, df_trial_V4, by = "Patient", all.x = TRUE)
+
+################################################### V8
+df_trial_V8 <- data.frame(Patient=patientLevels_SMART,
+                         Treatment=c('Control','Control',
+                               'MSC','MSC',
+                               'Control','Control',
+                               'MSC','MSC','MSC',
+                               'Control','Control',
+                               'MSC',
+                               'Control','Control',
+                               'MSC','MSC','MSC',
+                               'Control'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                        Period=c('1','1',
+                               '1','1',
+                               '1','1',
+                               '1','1','1',
+                               '1','1',
+                               '1',
+                               '1','1',
+                               '1','1','1',
+                               '1'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+
+tmp_V8 <- merge(tmp_V8, df_trial_V8, by = "Patient", all.x = TRUE)
+
+################################################### V10
+df_trial_V10 <- data.frame(Patient=patientLevels_SMART,
+                         Treatment=c('MSC','MSC',
+                               'Control','Control',
+                               'MSC','MSC',
+                               'Control','Control','Control',
+                               'MSC','MSC',
+                               'Control',
+                               'MSC','MSC',
+                               'Control','Control','Control',
+                               'MSC'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                       Period=c('2','2',
+                               '2','2',
+                               '2','2',
+                               '2','2','2',
+                               '2','2',
+                               '2',
+                               '2','2',
+                               '2','2','2',
+                               '2'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+
+tmp_V10 <- merge(tmp_V10, df_trial_V10, by = "Patient", all.x = TRUE)
+
+########################################################################
+
+```
+
+### Define functional scores from CyTOF markers
+```{r}
+
+# Each row = one marker's contribution to one score
+score_def <- tribble(
+  ~marker,   ~score,             ~role,
+  # T-cell activation
+  "HLA-DR",  "T_activation",     "pos",
+  "CD38",    "T_activation",     "pos",
+  "CD44",    "T_activation",     "pos",
+  "CD25",    "T_activation",     "pos",
+  "CD278",   "T_activation",     "pos",
+
+  # T-cell memory / effector
+  "CD45RO",  "T_mem_eff",        "pos",
+  "CD27",    "T_mem_eff",        "pos",
+  "CD127",   "T_mem_eff",        "pos",
+  "CD45RA",  "T_mem_eff",        "neg",   # inverse
+
+  # Th17 / inflammatory trafficking
+  "CD196",   "Th17_homing",      "pos",
+  "CD194",   "Th17_homing",      "pos",
+  "CD195",   "Th17_homing",      "pos",
+  "CD184",   "Th17_homing",      "pos",
+  "CD161",   "Th17_homing",      "pos",
+  "CD146",   "Th17_homing",      "pos",
+
+  # CNS-homing T cells
+  "CD49d",   "CNS_homing",       "pos",
+  "CD184",   "CNS_homing",       "pos",
+  "CD195",   "CNS_homing",       "pos",
+  "CD49f",   "CNS_homing",       "pos",
+  "CD162",   "CNS_homing",       "pos",
+
+  # Treg-like (CD4+CD25+ context)
+  "CD25",    "Treg_like",        "pos",
+  "CD127",   "Treg_like",        "neg",   # inverse
+  "CD73",    "Treg_like",        "pos",
+  "HLA-DR",  "Treg_like",        "pos",
+
+  # B-cell activation
+  "CD38",    "B_activation",     "pos",
+  "CD27",    "B_activation",     "pos",
+  "CD73",    "B_activation",     "pos",
+  "CD185",   "B_activation",     "pos",
+  "HLA-DR",  "B_activation",     "pos",
+
+  # B memory vs naive
+  "CD27",    "B_mem_vs_naive",   "pos",
+  "CD38",    "B_mem_vs_naive",   "pos",
+  "CD45RO",  "B_mem_vs_naive",   "pos",
+  "CD45RA",  "B_mem_vs_naive",   "neg",
+  "CD10",    "B_mem_vs_naive",   "neg",
+
+  # Myeloid APC activation
+  "HLA-DR",  "Myeloid_APC",      "pos",
+  "CD11c",   "Myeloid_APC",      "pos",
+  "CD33",    "Myeloid_APC",      "pos",
+  "CD38",    "Myeloid_APC",      "pos",
+  "CD44",    "Myeloid_APC",      "pos",
+
+  # Non-classical vs classical monocytes
+  "CD14",    "Mono_nonclassical","neg",
+  "CD16",    "Mono_nonclassical","pos",
+  "HLA-DR",  "Mono_nonclassical","pos",
+
+  # NK activation / maturation
+  "CD56",    "NK_activation",    "pos",
+  "CD16",    "NK_activation",    "pos",
+  "CD161",   "NK_activation",    "pos",
+  "CD38",    "NK_activation",    "pos",
+  "CD44",    "NK_activation",    "pos"
+)
+
+markers <- sort(unique(score_def$marker))
+scores  <- c("T_activation",
+             "T_mem_eff",
+             "Th17_homing",
+             "CNS_homing",
+             "Treg_like",
+             "B_activation",
+             "B_mem_vs_naive",
+             "Myeloid_APC",
+             "Mono_nonclassical",
+             "NK_activation")
+
+grid <- crossing(marker = markers, score = scores) %>%
+  left_join(score_def, by = c("marker","score")) %>%
+  mutate(
+    role = replace_na(role, "none"),
+    role = factor(role, levels = c("none","pos","neg")),
+    score = factor(score, levels = scores),
+    marker = factor(marker, levels = rev(markers))
+  )
+
+#### plot the score construction scheme
+p_scores <- ggplot(grid, aes(x = score, y = marker, fill = role)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_manual(
+    values = c(
+      "none" = "grey95",
+      "pos"  = "#D73027",  # red-ish for positive
+      "neg"  = "#4575B4"   # blue-ish for inverse
+    ),
+    labels = c(
+      "none" = "Not used",
+      "pos"  = "Positive contribution",
+      "neg"  = "Negative (inverse)"
+    ),
+    name = "Marker role"
+  ) +
+  labs(
+    x = "Composite functional scores",
+    y = "Markers",
+    title = "Definition of composite functional scores"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x  = element_text(angle = 35, hjust = 1, vjust = 1),
+    panel.grid   = element_blank(),
+    plot.title   = element_text(face = "bold", hjust = 0.5),
+    axis.title.y = element_text(margin = margin(r = 8)),
+    legend.position = "bottom",aspect.ratio = 0.8
+  )
+
+ggsave(file.path(dirs$figures, "Figure_4A.pdf"), p_scores, width = 12, height = 9)
+
+```
+
+### Compute and visualise the functional scores at baseline
+```{r}
+
+# choose the markers needed for the scores
+marker_cols <- c(
+  "HLADR","CD38","CD44","CD25","CD278",          # activation
+  "CD45RO","CD27","CD127","CD45RA",               # memory/eff
+  "CD196","CD194","CD195","CD184","CD161","CD146",# Th17 / homing
+  "CD49d","CD49f","CD162",                        # CNS-homing
+  "CD73","CD11c","CD33","CD14","CD16",            # APC / mono
+  "CD56","CD185","CD10"                           # NK / B mem-naive
+)
+
+tmp <- rbind(tmp_V4,tmp_V8,tmp_V10)
+
+# baseline: Patient x CellType median marker expression
+baseline_cluster <- tmp %>%
+  group_by(Patient, timePoint,CellType) %>%
+  summarise(
+    across(all_of(marker_cols), median, na.rm = TRUE),
+    .groups = "drop"
+  )
+#global z-score
+baseline_z <- baseline_cluster %>%
+  mutate(
+    across(
+      all_of(marker_cols),
+      ~ as.numeric(scale(.x, center = TRUE, scale = TRUE)),
+      .names = "{.col}_z"
+    )
+  )
+#compute scores
+baseline_scores <- baseline_z %>%
+  mutate(
+    # T-cell activation
+    T_activation = (HLADR_z + CD38_z + CD44_z + CD25_z + CD278_z) / 5,
+
+    # T-cell memory / effector differentiation
+    T_mem_eff = (CD45RO_z + CD27_z + CD127_z - CD45RA_z) / 4,
+
+    # Th17 / inflammatory trafficking
+    Th17_homing = (CD196_z + CD194_z + CD195_z + CD184_z + CD161_z + CD146_z) / 6,
+
+    # CNS-homing T cells
+    CNS_homing = (CD49d_z + CD184_z + CD195_z + CD49f_z + CD162_z) / 5,
+
+    # Treg-like (for CD4+CD25+ contexts)
+    Treg_like = (CD25_z - CD127_z + CD73_z + HLADR_z) / 4,
+
+    # B-cell activation
+    B_activation = (CD38_z + CD27_z + CD73_z + CD185_z + HLADR_z) / 5,
+
+    # B memory vs naive
+    B_mem_vs_naive = (CD27_z + CD38_z + CD45RO_z - CD45RA_z - CD10_z) / 5,
+
+    # Myeloid APC activation
+    Myeloid_APC = (HLADR_z + CD11c_z + CD33_z + CD38_z + CD44_z) / 5,
+
+    # Non-classical vs classical monocytes
+    Mono_nonclassical = (-CD14_z + CD16_z + HLADR_z) / 3,
+
+    # NK activation / maturation
+    NK_activation = (CD56_z + CD16_z + CD161_z + CD38_z + CD44_z) / 5
+  )
+
+#subselect the score data frame
+baseline_scores_short <- baseline_scores %>%
+  select(
+    Patient,
+    timePoint,
+    CellType,
+    T_activation,
+    T_mem_eff,
+    Th17_homing,
+    CNS_homing,
+    Treg_like,
+    B_activation,
+    B_mem_vs_naive,
+    Myeloid_APC,
+    Mono_nonclassical,
+    NK_activation
+  )
+#annotate cell types and lineages
+cluster_annot <- data.frame(
+  CellType = cfg$all_cellType_order,
+  lineage  = c("CD4_T","CD4_T","CD4_T","CD4_T","CD4_T",
+               "CD8_T","CD8_T","CD8_T","CD8_T","CD8_T",
+               "B","B","B","B","B","B",
+               "NK","NK","NK","NK","NK",
+               "DC","DC",
+               "Mono","Mono")
+)
+
+lineage_colors <- c(
+  CD4_T = "#1f77b4",
+  CD8_T = "#9467bd",
+  B     =  "#d62728",
+  NK    ="#ff7f0e",
+  DC    = 'khaki3',
+  Mono  = "#2ca02c"
+)
+
+score_cols <- c(
+  "T_activation",
+  "T_mem_eff",
+  "Th17_homing",
+  "CNS_homing",
+  "Treg_like",
+  "B_activation",
+  "B_mem_vs_naive",
+  "Myeloid_APC",
+  "Mono_nonclassical",
+  "NK_activation"
+)
+
+#subselect only baseline
+baseline_scores_short <- baseline_scores_short[baseline_scores_short$timePoint=='V4',]
+
+baseline_celltype_scores <- baseline_scores_short %>%
+  group_by(CellType) %>%
+  summarise(
+    across(all_of(score_cols), median, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+baseline_celltype_scores <- baseline_celltype_scores %>%
+  left_join(cluster_annot, by = "CellType")
+
+lineage_order <- c("CD4_T","CD8_T","B","NK","DC","Mono")
+
+baseline_celltype_scores <- baseline_celltype_scores %>%
+  mutate(
+    lineage  = factor(lineage, levels = lineage_order),
+    CellType = factor(CellType, levels = cfg$all_cellType_order)  # your chosen order
+  ) %>%
+  arrange(lineage, CellType)
+
+# matrix for heatmap (CellType × Scores)
+mat_scores <- baseline_celltype_scores %>%
+  select(all_of(score_cols)) %>%
+  as.matrix()
+
+rownames(mat_scores) <- baseline_celltype_scores$CellType
+
+# row annotation: lineage per CellType
+row_annot <- data.frame(
+  lineage = baseline_celltype_scores$lineage
+)
+rownames(row_annot) <- baseline_celltype_scores$CellType
+
+annot_colors <- list(
+  lineage = lineage_colors
+)
+
+# colour palette for scores
+score_palette <- colorRampPalette(c("#4575B4", "white", "#D73027"))(100)
+
+out_file <- file.path(dirs$figures, "Functional_scores_baseline.pdf")
+
+pheatmap::pheatmap(
+  mat_scores,
+  color            = score_palette,
+  scale            = "none",         # scores are already z-based composites
+  cluster_rows     = FALSE,
+  cluster_cols     = FALSE,
+  annotation_row   = row_annot,
+  annotation_colors = annot_colors,
+  border_color     = NA,
+  fontsize_row     = 9,
+  fontsize_col     = 10,
+  main             = "Baseline functional scores per immune phenotype",
+  gaps_row = c(5,10,16,21,23),
+  gaps_col = c(5,7,9),
+  filename =out_file
+)
+
+##### visualise scores for T cells - the code can be modified accoringly for other cell type subsets
+baseline_long <- baseline_scores_short %>%
+  select(Patient, CellType, all_of(score_cols)) %>%
+  pivot_longer(
+    cols      = all_of(score_cols),
+    names_to  = "Score",
+    values_to = "value"
+  ) %>%
+  left_join(cluster_annot, by = "CellType") %>%
+  mutate(
+    CellType = factor(CellType, levels = cfg$all_cellType_order),
+    Score    = factor(Score, levels = score_cols)
+  )
+
+summarise_scores <- function(df) {
+  df %>%
+    group_by(Score, CellType) %>%
+    summarise(
+      median_val = median(value, na.rm = TRUE),
+      se_val     = sd(value, na.rm = TRUE) / sqrt(n()),
+      .groups    = "drop"
+    )
+}
+
+plot_scores_block <- function(long_df, summary_df, title_text) {
+  ggplot() +
+    # median as filled circle
+    geom_point(
+      data = summary_df,
+      aes(x = CellType, y = median_val, fill = CellType),
+      shape = 21,
+      size  = 2,
+      color = "black"
+    ) +
+    # SE error bars
+    geom_errorbar(
+      data = summary_df,
+      aes(
+        x    = CellType,
+        ymin = median_val - se_val,
+        ymax = median_val + se_val
+      ),
+      width = 0.2
+    ) +
+    # individual patients as grey jittered points
+    geom_point(
+      data = long_df,
+      aes(x = CellType, y = value, group = Patient),
+      position = position_jitter(width = 0.1),
+      alpha    = 0.3,
+      size     = 1,
+      color    = "grey48"
+    ) +
+    coord_flip() +
+    facet_wrap(~ Score, scales = "free_x",nrow=1) +
+    scale_fill_manual(values = cfg$colors_all) +
+    labs(
+      x     = "",
+      y     = "Functional score (baseline)",
+      title = title_text
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid.major = element_line(size = 0.2),
+      panel.grid.minor = element_blank(),
+      legend.position  = "none",
+      axis.text.x      = element_text(angle = 0, hjust = 0.5,size=6),
+      axis.text.y      = element_text(size=6),
+      strip.text       = element_text(face = "bold"),
+      aspect.ratio = 1
+    )
+}
+
+T_scores <- c("T_activation", "T_mem_eff", "Th17_homing", "CNS_homing", "Treg_like")
+baseline_T <- baseline_long %>%
+  filter(
+    Score %in% T_scores,
+    lineage %in% c("CD4_T", "CD8_T")
+  )
+
+summary_T <- summarise_scores(baseline_T)
+
+p_T <- plot_scores_block(
+  long_df    = baseline_T,
+  summary_df = summary_T,
+  title_text = "Baseline T-cell functional scores"
+)
+
+ggsave(file.path(dirs$figures, "Figure_4B.pdf"), p_T, width = 12, height = 9)
+
+```
+
+
+### Compute all functional scores after treatment and compare them between arms
+```{r}
+#use the combined data frame with all cells from BL, 6m and 12m
+allCells <- tmp
+rm(tmp) #save some space in memory
+
+#redo the computation 
+cluster_medians_all <- allCells %>%
+  filter(timePoint %in% c("V4","V8","V10")) %>%     # BL, 6m, 12m
+  group_by(Patient, timePoint, CellType, Batch, Age, Sex,
+           Treatment, Period, Sequence) %>%         # assume these are already present
+  summarise(
+    across(all_of(marker_cols), median, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cluster_z <- cluster_medians_all %>%
+  mutate(
+    across(
+      all_of(marker_cols),
+      ~ as.numeric(scale(.x, center = TRUE, scale = TRUE)),
+      .names = "{.col}_z"
+    )
+  )
+
+cluster_scores <- cluster_z %>%
+  mutate(
+    T_activation =
+      (HLADR_z + CD38_z + CD44_z + CD25_z + CD278_z) / 5,
+
+    T_mem_eff =
+      (CD45RO_z + CD27_z + CD127_z - CD45RA_z) / 4,
+
+    Th17_homing =
+      (CD196_z + CD194_z + CD195_z + CD184_z + CD161_z + CD146_z) / 6,
+
+    CNS_homing =
+      (CD49d_z + CD184_z + CD195_z + CD49f_z + CD162_z) / 5,
+
+    Treg_like =
+      (CD25_z - CD127_z + CD73_z + HLADR_z) / 4,
+
+    B_activation =
+      (CD38_z + CD27_z + CD73_z + CD185_z + HLADR_z) / 5,
+
+    B_mem_vs_naive =
+      (CD27_z + CD38_z + CD45RO_z - CD45RA_z - CD10_z) / 5,
+
+    Myeloid_APC =
+      (HLADR_z + CD11c_z + CD33_z + CD38_z + CD44_z) / 5,
+
+    Mono_nonclassical =
+      (-CD14_z + CD16_z + HLADR_z) / 3,
+
+    NK_activation =
+      (CD56_z + CD16_z + CD161_z + CD38_z + CD44_z) / 5
+  )
+
+#generate the data frame with all info we need for modeling
+analysis_scores_df <- cluster_scores %>%
+  filter(timePoint %in% c("V8","V10"),
+         Treatment %in% c("Control","MSC")) %>%
+  mutate(
+    Treatment = factor(Treatment, levels = c("Control","MSC")),
+    Period    = factor(Period, levels = c("1","2")),
+    Sequence  = factor(Sequence, levels = c("Control_first","MSC_first")),
+    Sex       = factor(Sex),
+    age_c     = Age - mean(Age, na.rm = TRUE)
+  )
+
+analysis_scores_df_short <- analysis_scores_df %>%
+  select(
+    Patient,
+    CellType,
+    Batch,
+    age_c,
+    Sex,
+    Period,
+    timePoint,
+    Sequence,
+    Treatment,
+    T_activation,
+    T_mem_eff,
+    Th17_homing,
+    CNS_homing,
+    Treg_like,
+    B_activation,
+    B_mem_vs_naive,
+    Myeloid_APC,
+    Mono_nonclassical,
+    NK_activation
+  )
+
+analysis_scores_df_short <- analysis_scores_df_short %>%
+  left_join(cluster_annot, by = "CellType")
+
+```
+
+
+### Longitudinal modelling of functional scores 
+We use similar setup with the cell composition analysis
+```{r}
+
+# main function with formula used
+fit_one_score_celltype <- function(df, score_name, celltype_name) {
+  # subset to this CellType
+  df_sub <- df[df$CellType == celltype_name, ]
+
+  # Guard: not enough data or only one treatment present
+  if (nrow(df_sub) < 6 || length(unique(df_sub$Treatment)) < 2) {
+    return(NULL)
+  }
+
+  # build the formula: score ~ Treatment + Period + Sequence + Batch + age_c + Sex + (1|Patient)
+  form <- as.formula(
+    paste0(score_name, " ~ Treatment + Period + Sequence + Batch + age_c + Sex + (1 | Patient)")
+  )
+
+  fit <- lmer(form, data = df_sub)
+  coefs <- coef(summary(fit))
+
+  # robustly check for TreatmentMSC row
+  if (!"TreatmentMSC" %in% rownames(coefs)) {
+    return(NULL)
+  }
+
+  data.frame(
+    CellType = celltype_name,
+    Score    = score_name,
+    estimate = coefs["TreatmentMSC", "Estimate"],
+    se       = coefs["TreatmentMSC", "Std. Error"],
+    p_value  = coefs["TreatmentMSC", "Pr(>|t|)"],
+    stringsAsFactors = FALSE
+  )
+}
+
+res_list <- list()
+k <- 1
+for (sc in score_cols) {
+  for (ct in cfg$all_cellType_order) {
+    out <- fit_one_score_celltype(
+      df           = analysis_scores_df,
+      score_name   = sc,
+      celltype_name = ct
+    )
+    if (!is.null(out)) {
+      res_list[[k]] <- out
+      k <- k + 1
+    }
+  }
+}
+results_scores <- do.call(rbind, res_list)
+results_scores <- results_scores %>%
+  mutate(
+    lower   = estimate - 1.96 * se,
+    upper   = estimate + 1.96 * se,
+    q_value = p.adjust(p_value, method = "BH")
+  )
+results_scores <- results_scores %>% left_join(cluster_annot, by = "CellType")
+
+
+```
+
+
+### Visualisation - Heatmap with effect sizes
+```{r}
+
+# Use the same score order as in your baseline heatmap
+score_order <- colnames(mat_scores)   # assuming mat_scores already in correct col order
+
+# Use the same cell-type order as in row_annot / mat_scores
+celltype_order <- rownames(mat_scores)
+
+effects_wide <- results_scores %>%
+  mutate(
+    Score    = factor(Score, levels = score_order),
+    CellType = factor(CellType, levels = celltype_order)
+  ) %>%
+  arrange(CellType, Score) %>%
+  select(CellType, Score, estimate) %>%
+  tidyr::pivot_wider(
+    names_from  = Score,
+    values_from = estimate
+  )
+
+mat_effects <- as.matrix(effects_wide[ , score_order, drop = FALSE])
+rownames(mat_effects) <- effects_wide$CellType
+
+effect_palette <- colorRampPalette(c("#f1a340", "#f7f7f7", "#998ec3"))(100)
+
+max_abs <- max(abs(mat_effects), na.rm = TRUE)
+breaks_effects <- seq(-max_abs, max_abs, length.out = 100)
+
+num_mat <- ifelse(results_scores$ p_value < 0.05, "*", "")
+num_wide <- results_scores %>%
+  mutate(
+    Score    = factor(Score, levels = score_order),
+    CellType = factor(CellType, levels = celltype_order),
+    star     = ifelse(p_value < 0.05, "*", "")
+  ) %>%
+  select(CellType, Score, star) %>%
+  pivot_wider(names_from = Score, values_from = star)
+
+num_mat <- as.matrix(num_wide[ , score_order, drop = FALSE])
+rownames(num_mat) <- num_wide$CellType
+
+out_file <- file.path(dirs$figures, "Figure_4C.pdf")
+
+pheatmap::pheatmap(
+  mat_effects,
+  color             = effect_palette,      # <-- new palette
+  breaks            = breaks_effects,
+  scale             = "none",
+  cluster_rows      = FALSE,
+  cluster_cols      = FALSE,
+  annotation_row    = row_annot,
+  annotation_colors = annot_colors,
+  border_color      = NA,
+  fontsize_row      = 9,
+  fontsize_col      = 10,
+  main              = "MSC vs Control effect on functional scores",
+  gaps_row          = c(5,10,16,21,23),
+  gaps_col          = c(5,7,9),
+  display_numbers   = num_mat,
+  filename          = out_file
+)
+
+```

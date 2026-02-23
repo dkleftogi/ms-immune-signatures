@@ -4,7 +4,7 @@ R-based workflows for CyTOF preprocessing, harmonization, and immune signature d
 
 Additionally the repo hosts a pipeline to reproduce the analysis presented in our article titled:
 
-"Multi-modal immune profiling in progressive multiple sclerosis following intrathecal mesenchymal stem cell therapy
+"Intrathecal mesenchymal stem cell therapy in progressive multiple sclerosis: cross-compartment immune profiling in the SMART-MS randomized trial"
 
 ## Scope
 This repository contains analysis code and documentation only.

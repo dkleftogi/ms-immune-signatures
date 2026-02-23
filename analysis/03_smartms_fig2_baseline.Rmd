@@ -55,7 +55,7 @@ params <- list(
   #EDIT HERE
   out_base = "outputs/SMARTMS_publication",
 
-  # Baseline definition for SMART-MS in your original notebook
+  # Baseline definition for SMART-MS
   cohort = "SMART",
   baseline_timePoint = "V4",
   baseline_label = "BL",
@@ -90,7 +90,7 @@ dirs <- list(
 lapply(dirs, ensure_dir)
 
 # -----------------------------
-# Marker panel + plotting metadata (from your original notebook)
+# Marker panel + plotting metadata
 # -----------------------------
 col.names <- c("CD16","CD4","CD14","CD19","CD3","CD235ab","CD11c","CD33",
                "CD133","CD123","CD162","CD185","CD45RA","CD278","CD194","CD161",

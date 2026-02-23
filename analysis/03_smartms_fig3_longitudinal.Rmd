@@ -72,7 +72,7 @@ params <- list(
   #EDIT HERE IF NEEDED
   out_base = "outputs/SMARTMS_publication",
 
-  # Baseline definition for SMART-MS in your original notebook
+  # Baseline definition for SMART-MS data
   cohort = "SMART",
   timepoints = c("V4","V8","V10"),
   baseline_timePoint = "V4",
@@ -113,7 +113,7 @@ dirs <- list(
 )
 lapply(dirs, ensure_dir)
 
-# Colors for time points (as in your original notebook)
+# Colors for time points 
 color_TimePoints <- c("deepskyblue2", "magenta2", "indianred2")
 names(color_TimePoints) <- params$timepoints
 
@@ -446,7 +446,7 @@ u <- umap::umap(X)
 data_umap$UMAP1 <- u$layout[, 1]
 data_umap$UMAP2 <- u$layout[, 2]
 
-# 5) Labels + timepoint names (same as your original)
+# 5) Labels + timepoint names 
 data_umap$labels <- factor(data_umap$CellType, levels = cfg$all_cellType_order)
 
 data_umap$TimePoint <- data_umap$timePoint
@@ -499,7 +499,7 @@ cellFreqSummary <- freq_long %>%
   dplyr::select(Patient, TimePoint = timePoint, CellType, freq) %>%
   tidyr::pivot_wider(names_from = CellType, values_from = freq, values_fill = 0)
 
-# Add Batch like your original (unique batch per patient in that visit)
+# Add Batch (unique batch per patient in that visit)
 batch_map <- allCells %>%
   dplyr::filter(timePoint %in% c("V4","V8","V10")) %>%
   dplyr::group_by(Patient, timePoint) %>%
@@ -518,7 +518,7 @@ for (ct in cfg$all_cellType_order) {
 cellFreqSummary <- cellFreqSummary %>%
   dplyr::select(Patient, Batch, TimePoint, dplyr::all_of(cfg$all_cellType_order))
 
-# Replace NAs with 0 (like your original)
+# Replace NAs with 0 
 cellFreqSummary[is.na(cellFreqSummary)] <- 0
 
 
@@ -527,11 +527,11 @@ cellFreqSummary[is.na(cellFreqSummary)] <- 0
 
 ### Build modelling table (V8/V10) - CLR transform
 ```{r}
-# Keep only V8/V10 for treatment modelling (as in your original)
+# Keep only V8/V10 for treatment modelling 
 cellFreqSummary_6_12 <- cellFreqSummary %>%
   dplyr::filter(TimePoint %in% c("V8","V10"))
 
-# Combine trial meta (your original df_trial_V8/V10)
+# Combine trial meta 
 trial_meta <- dplyr::bind_rows(
   df_trial_V8  %>% dplyr::mutate(TimePoint = "V8"),
   df_trial_V10 %>% dplyr::mutate(TimePoint = "V10")
@@ -789,7 +789,7 @@ for (i in seq_len(nrow(top_hits))) {
 tmp0 <- tmp_V4[tmp_V4$Cohort == "SMART", ]
 tmp0[tmp0$timePoint == "V4", "timePoint"] <- "BL"
 
-# tmp1, tmp2 = your 6m / 12m subsets (I assume already defined with Treatment etc.)
+# 
 tmp <- rbind(tmp0, tmp1, tmp2)
 
 tmp <- tmp %>%
