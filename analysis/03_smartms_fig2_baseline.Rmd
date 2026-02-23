@@ -24,7 +24,7 @@ This code is licensed under the MIT License.
 Copyright 2026, University of Bergen (UiB) and Neuro-SysMed, Norway
 
 
-### Initiation and parameters setup - EDITS NEEDED
+### Initiation and parameters setup - MAYBE EDITS ARE NEEDED FOR DIRS
 ```{r}
 
 suppressPackageStartupMessages({
@@ -36,6 +36,7 @@ suppressPackageStartupMessages({
   library(circlize)
 })
 
+#EDIT HERE - SET YOUR WORKING DIR APPROPRIATELY
 source("R/smartms_config.R")
 source("R/io_zenodo.R")
 
@@ -48,10 +49,10 @@ params <- list(
   zenodo_url = "PASTE_ZENODO_DIRECT_DOWNLOAD_URL_HERE",
 
   # Local cache path (ignored by git)
-  #data_path = "PASTE_LOCAL_DOWNLOAD_FILE_HERE",
-  data_path = '/Home/siv32/dkl081/Desktop/SMART/SMART_RAMMS_harmonised/allCells_combined.RDa',
+  data_path = "PASTE_LOCAL_DOWNLOAD_FILE_HERE",
+  #example -> data_path = '/Home/siv32/dkl081/Desktop/SMART/SMART_RAMMS_harmonised/allCells_combined.RDa',
   
-  # Output base (ignored by git)
+  #EDIT HERE
   out_base = "outputs/SMARTMS_publication",
 
   # Baseline definition for SMART-MS in your original notebook

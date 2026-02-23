@@ -1,0 +1,902 @@
+---
+title: "SMART-MS Figure 3 – Longitudinal immune landscape"
+author: "Dimitrios Kleftogiannis"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+editor_options:
+  chunk_output_type: inline
+---
+  
+### Contact
+  
+Comments and bug reports are welcome, please email: Dimitrios Kleftogiannis (dimitrios.kleftogiannis@uib.no)
+
+We are also interested to know about how you have used our source code, including any improvements that you have implemented.
+
+You are free to modify, extend or distribute our source code, as long as our copyright notice remains unchanged and included in its entirety. 
+
+### License
+
+This code is licensed under the MIT License.
+
+Copyright 2026, University of Bergen (UiB) and Neuro-SysMed, Norway
+
+### Initiation and parameters setup - MAYBE EDITS ARE NEEDED FOR DIRS 
+```{r}
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(umap)
+  library(RColorBrewer)
+  library(ComplexHeatmap)
+  library(circlize)
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(lme4)
+  library(lmerTest)
+  library(patchwork)
+  library(ggrepel)
+})
+
+#EDIT HERE - SET YOUR WORKING DIR APPROPRIATELY
+source("R/smartms_config.R")
+source("R/io_zenodo.R")
+#this is more elegant than before
+cfg <- get_smartms_config()
+# -----------------------------
+# Parameters (EDIT THESE)
+# -----------------------------
+col.names <- c("CD16","CD4","CD14","CD19","CD3","CD235ab","CD11c","CD33",
+                   "CD133","CD123","CD162","CD185","CD45RA","CD278","CD194","CD161",
+                   "CD184","CD27","CD44","CD127","CD10","CD73","HLADR","CD146",
+                   "CD117","CD8a","CD34","CD105","CD49d","CD20","CD25","CD66b",
+                   "CD49f","CD45RO","CD90","CD45","CD195","CD38","CD196","CD135","CD56")
+col.names.info <- c('type','type','type','type','type','state','type','type',
+                        'state','type','state','state','type','state','state','state',
+                        'state','state','state','state','state','state','type','state',
+                        'state','type','type','state','state','type','state','type',
+                        'state','type','state','type','state','type','state','state','type')
+
+params <- list(
+  # Direct download URL to Zenodo file that contains allCells_combined.RDa
+  # (Use the "Download" link for the file on Zenodo)
+  zenodo_url = "PASTE_ZENODO_DIRECT_DOWNLOAD_URL_HERE",
+
+  #EDIT HERE IF NEEDED
+  data_path = "PASTE_LOCAL_DOWNLOAD_FILE_HERE",
+  #example --> data_path = '/Home/siv32/dkl081/Desktop/SMART/SMART_RAMMS_harmonised/allCells_combined.RDa',
+  
+  #EDIT HERE IF NEEDED
+  out_base = "outputs/SMARTMS_publication",
+
+  # Baseline definition for SMART-MS in your original notebook
+  cohort = "SMART",
+  timepoints = c("V4","V8","V10"),
+  baseline_timePoint = "V4",
+  baseline_label = "BL",
+
+  # Reproducibility + runtime
+  seed = 1,
+  umap_max_cells = 50000,
+  umap_markers = cfg$col.names, 
+  
+  # Modelling settings
+  # cell type columns come from proportions (one per CellType)
+  p_adjust_method = "BH",
+  top_diag_n = 6  # number of top hits to show diagnostics
+)
+
+# -----------------------------
+# Helpers
+# -----------------------------
+ensure_dir <- function(path) {
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+}
+
+download_if_missing <- function(url, dest_path) {
+  if (file.exists(dest_path)) return(invisible(dest_path))
+  ensure_dir(dirname(dest_path))
+  message("Downloading dataset from Zenodo...")
+  utils::download.file(url, destfile = dest_path, mode = "wb", quiet = FALSE)
+  message("Saved to: ", dest_path)
+  invisible(dest_path)
+}
+
+# Output directories for this figure
+dirs <- list(
+  figures = file.path(params$out_base, "figures", "fig3_longitudinal"),
+  tables  = file.path(params$out_base, "tables",  "fig3_longitudinal"),
+  qc      = file.path(params$out_base, "qc",      "fig3_longitudinal")
+)
+lapply(dirs, ensure_dir)
+
+# Colors for time points (as in your original notebook)
+color_TimePoints <- c("deepskyblue2", "magenta2", "indianred2")
+names(color_TimePoints) <- params$timepoints
+
+set.seed(params$seed)
+```
+
+### Load cleaned CyTOF data (Zenodo → local)
+```{r}
+download_if_missing(params$zenodo_url, params$data_path)
+
+# This should load an object named: allCells
+load(params$data_path)
+stopifnot(exists("allCells"))
+
+# Robust naming
+if (!("CellType" %in% colnames(allCells)) && ("cellType" %in% colnames(allCells))) {
+  allCells$CellType <- allCells$cellType
+}
+
+# Required columns for Figure 3 + modelling
+required_cols <- c("Cohort","timePoint","Patient","CellType")
+missing_cols <- setdiff(required_cols, colnames(allCells))
+if (length(missing_cols) > 0) stop("Missing required columns in allCells: ", paste(missing_cols, collapse=", "))
+
+# Keep SMART only (you do SMART first in the original)
+allCells <- allCells[allCells$Cohort == params$cohort, ]
+
+# --- Subset by visit
+tmp_V4  <- allCells[allCells$timePoint == "V4", ]
+tmp_V8  <- allCells[allCells$timePoint == "V8", ]
+tmp_V10 <- allCells[allCells$timePoint == "V10", ]
+
+```
+
+
+### Clinical design metadata 
+```{r}
+
+patientLevels_SMART <- cfg$patientLevels_SMART
+################################################### V4
+df_trial_V4 <- data.frame(Patient=patientLevels_SMART,
+                         Treatment=c('Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline','Baseline',
+                               'Baseline'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                       Period=c('0','0',
+                               '0','0',
+                               '0','0',
+                               '0','0','0',
+                               '0','0',
+                               '0',
+                               '0','0',
+                               '0','0','0',
+                               '0'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+tmp_V4 <- merge(tmp_V4, df_trial_V4, by = "Patient", all.x = TRUE)
+
+################################################### V8
+df_trial_V8 <- data.frame(Patient=patientLevels_SMART,
+                         Treatment=c('Control','Control',
+                               'MSC','MSC',
+                               'Control','Control',
+                               'MSC','MSC','MSC',
+                               'Control','Control',
+                               'MSC',
+                               'Control','Control',
+                               'MSC','MSC','MSC',
+                               'Control'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                        Period=c('1','1',
+                               '1','1',
+                               '1','1',
+                               '1','1','1',
+                               '1','1',
+                               '1',
+                               '1','1',
+                               '1','1','1',
+                               '1'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+
+tmp_V8 <- merge(tmp_V8, df_trial_V8, by = "Patient", all.x = TRUE)
+
+################################################### V10
+df_trial_V10 <- data.frame(Patient=patientLevels_SMART,
+                         Treatment=c('MSC','MSC',
+                               'Control','Control',
+                               'MSC','MSC',
+                               'Control','Control','Control',
+                               'MSC','MSC',
+                               'Control',
+                               'MSC','MSC',
+                               'Control','Control','Control',
+                               'MSC'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                       Period=c('2','2',
+                               '2','2',
+                               '2','2',
+                               '2','2','2',
+                               '2','2',
+                               '2',
+                               '2','2',
+                               '2','2','2',
+                               '2'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+
+tmp_V10 <- merge(tmp_V10, df_trial_V10, by = "Patient", all.x = TRUE)
+
+########################################################################
+
+
+```
+
+### Number of cells per CellType at 6m and 12m
+```{r}
+
+# ============================================================
+# Supp_Figure_2 – Number of cells per CellType at 6m and 12m
+# ============================================================
+tmp1 <- tmp_V8
+tmp1[tmp1$timePoint == "V8",  "timePoint"] <- "6m"
+
+tmp2 <- tmp_V10
+tmp2[tmp2$timePoint == "V10", "timePoint"] <- "12m"
+
+tmp_6_12 <- rbind(tmp1, tmp2)
+
+timePointCellType <- tmp_6_12 %>%
+  dplyr::group_by(CellType, timePoint) %>%
+  dplyr::summarise(samples = dplyr::n(), .groups = "drop")
+
+timePointCellType$CellType  <- factor(timePointCellType$CellType, levels = cfg$all_cellType_order)
+timePointCellType$timePoint <- factor(timePointCellType$timePoint, levels = c("6m", "12m"))
+
+str_y <- "Number of cells"
+o2 <- ggplot(timePointCellType) +
+  aes(x = CellType, y = samples, fill = CellType) +
+  geom_bar(stat = "identity", width = 0.28, alpha = 1, color = "black", linewidth = 0.2) +
+  facet_wrap(~ timePoint, scales = "free_y", nrow = 3) +
+  ylab(str_y) +
+  theme_bw() +
+  scale_fill_manual(values = cfg$colors_all) +
+  theme(
+    legend.position = "none",
+    axis.title.y = element_text(size = 12),
+    axis.text.y  = element_text(size = 12),
+    axis.text.x  = element_text(angle = 90, size = 12, hjust = 0.95, vjust = 0.5),
+    axis.title.x = element_blank(),
+    aspect.ratio = 0.3
+  )
+
+ggsave(file.path(dirs$figures, "Supp_Figure_2.pdf"), o2, width = 12, height = 9)
+
+
+```
+
+### Lineage-level composition at 6 and 12 months by active treatment
+```{r}
+
+cluster_map <- data.frame(
+  CellType = cfg$all_cellType_order,
+  lineage = c('CD4_T','CD4_T','CD4_T','CD4_T','CD4_T',
+              'CD8_T','CD8_T','CD8_T','CD8_T','CD8_T',
+              'B','B','B','B','B','B',
+              'NK','NK','NK','NK','NK',
+              'DC','DC',
+              'Mono','Mono'),
+  stringsAsFactors = FALSE
+)
+
+lineage_colors <- c(
+  CD4_T = "#1f77b4",
+  CD8_T = "#9467bd",
+  B     = "#d62728",
+  NK    = "#ff7f0e",
+  DC    = "khaki3",
+  Mono  = "#2ca02c"
+)
+
+tmp_6_12_ann <- tmp_6_12 %>%
+  dplyr::mutate(CellType = as.character(CellType)) %>%
+  dplyr::left_join(cluster_map, by = "CellType")
+
+lineage_counts <- tmp_6_12_ann %>%
+  dplyr::group_by(Patient, timePoint, Treatment, lineage) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop")
+
+totals <- tmp_6_12_ann %>%
+  dplyr::group_by(Patient, timePoint, Treatment) %>%
+  dplyr::summarise(total_cells = dplyr::n(), .groups = "drop")
+
+lineage_prop <- lineage_counts %>%
+  dplyr::left_join(totals, by = c("Patient", "timePoint", "Treatment")) %>%
+  dplyr::mutate(prop = n / total_cells) %>%
+  dplyr::mutate(
+    Patient = factor(Patient, levels = cfg$patientLevels_SMART),
+    lineage = factor(lineage, levels = c("CD4_T","CD8_T","B","NK","DC","Mono"))
+  )
+
+o <- ggplot(lineage_prop, aes(x = Patient, y = prop, fill = lineage)) +
+  geom_col() +
+  facet_grid(timePoint ~ Treatment) +
+  scale_fill_manual(values = lineage_colors) +
+  labs(
+    x = "Patient",
+    y = "Relative abundance",
+    fill = "Lineage",
+    title = "Lineage-level composition at 6 and 12 months by active treatment"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    aspect.ratio = 0.5
+  )
+
+ggsave(file.path(dirs$figures, "Figure_3A.pdf"), o, width = 12, height = 7)
+
+
+```
+
+
+
+### UMAP only on V8/V10 subset + plot
+```{r}
+
+
+# 1) Subset FIRST (critical otherwise it will crash)
+data_sub <- allCells[allCells$timePoint %in% c("V8", "V10"), ]
+
+# 2) Ensure marker columns exist
+missing_markers <- setdiff(col.names, colnames(data_sub))
+if (length(missing_markers) > 0) {
+  stop("Cannot compute UMAP: missing marker columns in data_sub: ",
+       paste(missing_markers, collapse = ", "))
+}
+
+# 3) Optional subsampling (recommended if data_sub is large)
+set.seed(params$seed)
+
+keep_idx <- sample(seq_len(nrow(data_sub)), params$umap_max_cells)
+data_umap <- data_sub[keep_idx, ]
+  
+# Save indices for full reproducibility/debugging
+  
+# 4) Compute UMAP on the chosen set only
+X <- as.matrix(data_umap[,col.names])
+u <- umap::umap(X)
+
+data_umap$UMAP1 <- u$layout[, 1]
+data_umap$UMAP2 <- u$layout[, 2]
+
+# 5) Labels + timepoint names (same as your original)
+data_umap$labels <- factor(data_umap$CellType, levels = cfg$all_cellType_order)
+
+data_umap$TimePoint <- data_umap$timePoint
+data_umap[data_umap$TimePoint == "V8",  "TimePoint"] <- "6m"
+data_umap[data_umap$TimePoint == "V10", "TimePoint"] <- "12m"
+data_umap$TimePoint <- factor(data_umap$TimePoint, levels = c("6m", "12m"))
+
+# 6) Plot (faithful styling)
+umap_clust <- ggplot(data_umap, aes(x = UMAP1, y = UMAP2, color = labels)) +
+  geom_point(size = 0.068) +
+  coord_fixed(ratio = 1) +
+  facet_wrap(~ TimePoint, nrow = 1) +
+  theme_bw() +
+  scale_color_manual(values = cfg$colors_all) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom",
+    legend.background = element_rect()
+  ) +
+  guides(colour = guide_legend(override.aes = list(size = 3), title = ""))
+
+ggsave(file.path(dirs$figures, "Supp_Figure_3.pdf"), umap_clust, width = 12, height = 6)
+
+```
+
+### cellFreqSummary (wide table) for the modelling section
+```{r}
+
+# ============================================================
+# Generate cellFreqSummary (Patient x TimePoint wide frequencies)
+# ============================================================
+
+# Frequency per Patient × timePoint × CellType
+freq_long <- allCells %>%
+  dplyr::filter(Patient %in% cfg$patientLevels_SMART,
+                timePoint %in% c("V4","V8","V10")) %>%
+  dplyr::group_by(Patient, timePoint, CellType) %>%
+  dplyr::summarise(samples = dplyr::n(), .groups = "drop") %>%
+  dplyr::group_by(Patient, timePoint) %>%
+  dplyr::mutate(freq = samples / sum(samples)) %>%
+  dplyr::ungroup()
+
+# Wide format (one row per Patient×TimePoint, columns = all cell types)
+cellFreqSummary <- freq_long %>%
+  dplyr::select(Patient, TimePoint = timePoint, CellType, freq) %>%
+  tidyr::pivot_wider(names_from = CellType, values_from = freq, values_fill = 0)
+
+# Add Batch like your original (unique batch per patient in that visit)
+batch_map <- allCells %>%
+  dplyr::filter(timePoint %in% c("V4","V8","V10")) %>%
+  dplyr::group_by(Patient, timePoint) %>%
+  dplyr::summarise(Batch = as.character(dplyr::first(Batch)), .groups = "drop") %>%
+  dplyr::rename(TimePoint = timePoint)
+
+cellFreqSummary <- cellFreqSummary %>%
+  dplyr::left_join(batch_map, by = c("Patient","TimePoint"))
+
+# Make sure all expected celltype columns exist (even if 0)
+for (ct in cfg$all_cellType_order) {
+  if (!ct %in% colnames(cellFreqSummary)) cellFreqSummary[[ct]] <- 0
+}
+
+# Reorder columns (optional but nice)
+cellFreqSummary <- cellFreqSummary %>%
+  dplyr::select(Patient, Batch, TimePoint, dplyr::all_of(cfg$all_cellType_order))
+
+# Replace NAs with 0 (like your original)
+cellFreqSummary[is.na(cellFreqSummary)] <- 0
+
+
+```
+
+
+### Build modelling table (V8/V10) - CLR transform
+```{r}
+# Keep only V8/V10 for treatment modelling (as in your original)
+cellFreqSummary_6_12 <- cellFreqSummary %>%
+  dplyr::filter(TimePoint %in% c("V8","V10"))
+
+# Combine trial meta (your original df_trial_V8/V10)
+trial_meta <- dplyr::bind_rows(
+  df_trial_V8  %>% dplyr::mutate(TimePoint = "V8"),
+  df_trial_V10 %>% dplyr::mutate(TimePoint = "V10")
+)
+
+# Merge covariates onto frequencies (sample-level table)
+cellFreqMeta <- cellFreqSummary_6_12 %>%
+  dplyr::left_join(trial_meta, by = c("Patient","TimePoint"))
+
+# Sanity check
+if (any(is.na(cellFreqMeta$Treatment))) {
+  stop("Missing clinical covariates after merge. Check Patient IDs and TimePoint labels.")
+}
+
+# Ensure all expected cell type columns exist
+for (ct in cfg$all_cellType_order) {
+  if (!ct %in% colnames(cellFreqMeta)) cellFreqMeta[[ct]] <- 0
+}
+
+# CLR transform with pseudocount
+pseudocount <- 1e-6
+props_mat <- as.matrix(cellFreqMeta[, cfg$all_cellType_order, drop = FALSE]) + pseudocount
+props_mat <- props_mat / rowSums(props_mat)
+
+log_mat <- log(props_mat)
+gm <- rowMeans(log_mat)
+clr_mat <- sweep(log_mat, 1, gm, "-")
+colnames(clr_mat) <- paste0(cfg$all_cellType_order, "_clr")
+
+cellFreqMeta <- dplyr::bind_cols(cellFreqMeta, as.data.frame(clr_mat))
+
+# Make factors like the original model expects
+cellFreqMeta <- cellFreqMeta %>%
+  mutate(
+    Patient  = factor(Patient),
+    TimePoint = factor(TimePoint, levels = c("V8","V10")),
+    Treatment = factor(Treatment),      # Control vs MSC
+    Period   = factor(Period),
+    Sequence = factor(Sequence),
+    Sex      = factor(Sex),
+    age_c    = scale(Age, center = TRUE, scale = FALSE)[,1]
+  )
+
+write.csv(cellFreqMeta, file.path(dirs$tables, "cellFreqMeta_CLR_V8_V10.csv"), row.names = FALSE)
+
+```
+
+
+### Mixed-effects modelling per cell type (lmer)
+```{r}
+
+clr_cols <- paste0(cfg$all_cellType_order, "_clr")
+has_batch <- "Batch" %in% colnames(cellFreqMeta)
+
+fit_one <- function(var_name) {
+
+  rhs <- if (has_batch) {
+    "Treatment + Period + Sequence + Batch + age_c + Sex + (1|Patient)"
+  } else {
+    "Treatment + Period + Sequence + age_c + Sex + (1|Patient)"
+  }
+
+  form <- as.formula(paste(var_name, "~", rhs))
+  fit <- lmer(form, data = cellFreqMeta)
+  coefs <- coef(summary(fit))
+
+  trt_terms <- grep("^Treatment", rownames(coefs), value = TRUE)
+  if (length(trt_terms) == 0) return(NULL)
+
+  term <- if ("TreatmentMSC" %in% trt_terms) "TreatmentMSC" else trt_terms[1]
+
+  data.frame(
+    cell_type = var_name,
+    term = term,
+    estimate = coefs[term, "Estimate"],
+    se = coefs[term, "Std. Error"],
+    p_value = coefs[term, "Pr(>|t|)"],
+    stringsAsFactors = FALSE
+  )
+}
+
+results_comp <- map_dfr(clr_cols, fit_one)
+
+results_comp <- results_comp %>%
+  mutate(
+    lower   = estimate - 1.96 * se,
+    upper   = estimate + 1.96 * se,
+    # back to original cell-type name (without _clr)
+    CellType = sub("_clr$", "", cell_type),
+    q_value = p.adjust(p_value, method = "BH")
+  )
+
+results_comp <- results_comp %>%
+  mutate(
+    Significant = q_value < 0.2,  # or p_value < 0.05, up to you
+    Population  = CellType        # rename for plotting, if you want
+  )
+
+# Add lineage for colouring in plots
+cluster_map <- data.frame(
+  CellType = cfg$all_cellType_order,
+  lineage = c('CD4_T','CD4_T','CD4_T','CD4_T','CD4_T',
+              'CD8_T','CD8_T','CD8_T','CD8_T','CD8_T',
+              'B','B','B','B','B','B',
+              'NK','NK','NK','NK','NK',
+              'DC','DC',
+              'Mono','Mono'),
+  stringsAsFactors = FALSE
+)
+
+results_comp <- results_comp %>%
+  left_join(cluster_map, by = "CellType") %>%
+  arrange(q_value)
+
+write.csv(results_comp, file.path(dirs$tables, "Fig3_lmer_results_treatment_CLR.csv"), row.names = FALSE)
+head(results_comp, 10)
+
+# ============================================================
+#  Forest plot of treatment effects (CLR)
+# ============================================================
+
+results_plot <- results_comp %>%
+  mutate(CellType = factor(CellType, levels = rev(cfg$all_cellType_order)))
+
+gg_forest <- ggplot(
+  results_comp,
+  aes(
+    y = reorder(CellType, estimate),
+    x = estimate,
+    color = Significant
+  )
+) +
+  geom_point(size = 3) +
+  geom_errorbarh(
+    aes(xmin = lower, xmax = upper),
+    height = 0.2,
+    alpha  = 0.7
+  ) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "red", linewidth = 0.6) +
+  geom_vline(xintercept = 0, color = "gray60", linetype = "dashed") +
+  scale_color_manual(
+    values = c("TRUE" = "#D73027", "FALSE" = "gray60"),
+    labels = c("FALSE" = "Not significant", "TRUE" = "Significant")
+  ) +
+  labs(
+    title = "MSC vs Control effect on CLR-transformed abundance",
+    x = "Effect size (CLR scale)",
+    y = NULL,
+    color = NULL
+  ) +
+  xlim(-1,1)+
+  theme_minimal(base_size = 13)+
+  theme(
+    strip.background = element_rect(fill = "gray90", color = NA),
+    strip.text = element_text(size = 13, face = "bold"),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.position = "bottom",
+    aspect.ratio = 1,
+    plot.title = element_text(size = 15, face = "bold", hjust = 0.5)
+  )
+
+ggsave(file.path(dirs$figures, "Fig3_lmer_forest_treatment_CLR.pdf"), gg_forest, width = 10, height = 9)
+
+
+
+o <- ggplot(results_comp, aes(x = estimate, y = -log10(p_value))) +
+  geom_point(aes(color = Significant), size = 3, alpha = 0.8) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", color = "gray60") +
+  geom_vline(xintercept = c(-0.5, 0.5), linetype = "dashed", color = "red", linewidth = 0.6) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red", linewidth = 0.6) +
+  geom_text_repel(
+    #data = subset(results_df, adj.p.value < 0.05),
+    aes(label = Population),
+    size = 2.5,
+    box.padding = 0.3,
+    max.overlaps = 10
+  ) +
+  scale_color_manual(values = c("TRUE" = "#D73027", "FALSE" = "gray50")) +
+  labs(
+    title = "Volcano Plot of MSC Treatment",
+    x = "Effect size (estimate) in CLR scale",
+    y = paste0(expression(-log[10](p~value)),'- non Adjusted'),
+    color = "Significant"
+  ) +
+  theme_minimal(base_size = 13)+
+  theme(
+    legend.position = "bottom",
+    aspect.ratio = 1
+  )
+
+ggsave(file.path(dirs$figures, "lmer_volcano_treatment_CLR.pdf"), o, width = 10, height = 9)
+
+```
+
+### Diagnostics for top hits of modeling
+```{r}
+
+# ============================================================
+# Diagnostics (top hits): residuals + QQ
+# ============================================================
+
+top_diag_n <- min(6, nrow(results_comp))
+
+top_hits <- results_comp %>%
+  filter(!is.na(q_value)) %>%
+  slice(1:top_diag_n)
+
+gg_residuals <- function(model, label) {
+  df <- data.frame(Fitted = fitted(model), Residuals = resid(model))
+  ggplot(df, aes(Fitted, Residuals)) +
+    geom_point(alpha = 0.6) +
+    geom_hline(yintercept = 0, color = "red") +
+    theme_bw() +
+    labs(title = paste("Residuals vs Fitted:", label))
+}
+
+gg_qq <- function(model, label) {
+  df <- data.frame(Residuals = resid(model))
+  ggplot(df, aes(sample = Residuals)) +
+    stat_qq() + stat_qq_line() +
+    theme_bw() +
+    labs(title = paste("QQ plot:", label))
+}
+
+for (i in seq_len(nrow(top_hits))) {
+  var_name <- top_hits$cell_type[i]
+  label <- top_hits$CellType[i]
+  
+  rhs <- if ("Batch" %in% colnames(cellFreqMeta)) {
+    "Treatment + Period + Sequence + Batch + age_c + Sex + (1|Patient)"
+  } else {
+    "Treatment + Period + Sequence + age_c + Sex + (1|Patient)"
+  }
+  
+  fit <- lmer(as.formula(paste(var_name, "~", rhs)), data = cellFreqMeta)
+  
+  p1 <- gg_residuals(fit, label)
+  p2 <- gg_qq(fit, label)
+  
+  ggsave(file.path(dirs$qc, paste0("diag_residuals_", label, ".pdf")), p1, width = 6, height = 5)
+  ggsave(file.path(dirs$qc, paste0("diag_qq_", label, ".pdf")), p2, width = 6, height = 5)
+}
+
+```
+
+
+### Extra code - Spaghetti plots on CLR scale for selected populations - EDIT if needed
+```{r}
+
+
+# Baseline SMART cohort
+tmp0 <- tmp_V4[tmp_V4$Cohort == "SMART", ]
+tmp0[tmp0$timePoint == "V4", "timePoint"] <- "BL"
+
+# tmp1, tmp2 = your 6m / 12m subsets (I assume already defined with Treatment etc.)
+tmp <- rbind(tmp0, tmp1, tmp2)
+
+tmp <- tmp %>%
+  mutate(
+    timePoint = factor(timePoint, levels = c("BL", "6m", "12m")),
+    Treatment = factor(Treatment, levels = c("Baseline", "Control", "MSC"))
+  )
+
+# Populations you want to show
+pops_of_interest <- c("CD4_CM", "CD4_TEMRA", "B_Mem", "NK_dim_CD16_low")
+
+
+cell_counts <- tmp %>%
+  group_by(Patient, timePoint, Treatment, CellType) %>%
+  summarise(n = n(), .groups = "drop")
+
+cell_counts_wide <- cell_counts %>%
+  filter(CellType %in% pops_of_interest) %>%
+  tidyr::pivot_wider(
+    names_from  = CellType,
+    values_from = n,
+    values_fill = 0
+  )
+
+# extract count matrix for the 4 pops
+mat <- as.matrix(cell_counts_wide[, pops_of_interest]) + 1e-6
+
+clr_mat <- compositions::clr(mat)
+colnames(clr_mat) <- paste0(pops_of_interest, "_clr")
+
+cell_counts_clr <- cbind(
+  cell_counts_wide[, c("Patient", "timePoint", "Treatment")],
+  as.data.frame(clr_mat)
+)
+
+pop_counts_clr <- cell_counts_clr %>%
+  tidyr::pivot_longer(
+    cols      = ends_with("_clr"),
+    names_to  = "CellType",
+    values_to = "clr"
+  ) %>%
+  mutate(
+    CellType = sub("_clr$", "", CellType),
+    CellType = factor(CellType, levels = pops_of_interest),
+    Patient  = factor(Patient)
+  )
+
+plot_violin_spaghetti_clr <- function(df, population_name) {
+  ggplot(df, aes(x = timePoint, y = clr, fill = Treatment)) +
+    geom_violin(trim = FALSE, alpha = 0.6) +
+    geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.8, color = "black") +
+    geom_line(aes(group = Patient, color = Treatment), alpha = 0.4) +
+    geom_point(
+      aes(color = Treatment),
+      size = 2,
+      position = position_jitterdodge(jitter.width = 0.1)
+    ) +
+    labs(
+      title = paste(population_name, ""),
+      x     = "",
+      y     = "CLR-transformed abundance"
+    ) +
+    scale_fill_manual(values = c(
+      "Baseline" = "grey70",
+      "Control"  = "royalblue3",
+      "MSC"      = "khaki3"
+    )) +
+    scale_color_manual(values = c(
+      "Baseline" = "grey40",
+      "Control"  = "royalblue3",
+      "MSC"      = "khaki3"
+    )) +
+    theme_minimal(base_size = 13) +
+    theme(
+      strip.background = element_rect(fill = "gray90", color = NA),
+      strip.text       = element_text(size = 13, face = "bold"),
+      axis.text.x      = element_text(size = 12, face = "bold"),
+      axis.text.y      = element_text(size = 12),
+      axis.title       = element_text(size = 14),
+      legend.position  = "bottom",
+      aspect.ratio     = 1,
+      plot.title       = element_text(size = 15, face = "bold", hjust = 0.5)
+    )
+}
+
+p_CD4_CM <- pop_counts_clr %>%
+  filter(CellType == "CD4_CM") %>%
+  plot_violin_spaghetti_clr("CD4_CM")
+
+p_CD4_TEMRA <- pop_counts_clr %>%
+  filter(CellType == "CD4_TEMRA") %>%
+  plot_violin_spaghetti_clr("CD4_TEMRA")
+
+p_B_Mem <- pop_counts_clr %>%
+  filter(CellType == "B_Mem") %>%
+  plot_violin_spaghetti_clr("B_Mem")
+
+p_NK_dim <- pop_counts_clr %>%
+  filter(CellType == "NK_dim_CD16_low") %>%
+  plot_violin_spaghetti_clr("NK_dim_CD16_low")
+
+fig3B_clr <- (p_CD4_CM | p_CD4_TEMRA) /
+  (p_B_Mem  | p_NK_dim) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+
+
+ggsave(file.path(dirs$figures, "Spaghetti_Figure_3C.pdf"), fig3B_clr, width = 12, height = 10)
+
+```
