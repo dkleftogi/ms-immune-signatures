@@ -336,7 +336,7 @@ ggsave(file.path(dirs$figures, "Figure_2A.pdf"), p_2a, width = 12, height = 9)
 
 ```
 
-### Heatmap of median marker expression per phenotype (baseline)
+### Heatmap of average marker expression per phenotype (baseline)
 ```{r}
 # ---- Figure 2B: Heatmap of mean marker expression per phenotype (baseline) ----
 # Faithful to original SMART-MS notebook, with optional 0–1 scaling for display.

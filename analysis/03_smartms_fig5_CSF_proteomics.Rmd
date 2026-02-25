@@ -1,0 +1,1703 @@
+---
+title: "SMART-MS Figure 5 – CSF proteomics analysis"
+author: "Dimitrios Kleftogiannis"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+editor_options:
+  chunk_output_type: inline
+---
+  
+### Contact
+  
+Comments and bug reports are welcome, please email: Dimitrios Kleftogiannis (dimitrios.kleftogiannis@uib.no)
+
+We are also interested to know about how you have used our source code, including any improvements that you have implemented.
+
+You are free to modify, extend or distribute our source code, as long as our copyright notice remains unchanged and included in its entirety. 
+
+### License
+
+This code is licensed under the MIT License.
+
+Copyright 2026, University of Bergen (UiB) and Neuro-SysMed, Norway
+
+### Initiation and parameters setup - MAYBE EDITS ARE NEEDED FOR DIRS 
+```{r}
+
+suppressPackageStartupMessages({
+library(RColorBrewer)
+library(gplots) 
+library(ggplot2)
+library(gdata)
+library(gridExtra)
+library(grid)
+library(reshape2)
+library(ggthemes)
+library(ggpubr)
+library(dplyr)
+library(umap)
+library(ComplexHeatmap)
+library(ConsensusClusterPlus)
+library(readxl)
+library(igraph)
+library(matrixStats)
+library(ggforce)
+library(ggraph)
+library(ggridges)
+library(tidyr)  
+library(ggrepel)
+library(broom)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(writexl)
+library(forcats)
+library(clusterProfiler)
+library(enrichplot)
+library(patchwork)
+library(stringr)
+  
+})
+
+#EDIT HERE IF NEEDED - SET YOUR WORKING DIR APPROPRIATELY
+source("R/smartms_config.R")
+source("R/io_zenodo.R")
+#this is more elegant than before
+cfg <- get_smartms_config()
+# -----------------------------
+# Parameters (EDIT THESE)
+# -----------------------------
+col.names <- c("CD16","CD4","CD14","CD19","CD3","CD235ab","CD11c","CD33",
+                   "CD133","CD123","CD162","CD185","CD45RA","CD278","CD194","CD161",
+                   "CD184","CD27","CD44","CD127","CD10","CD73","HLADR","CD146",
+                   "CD117","CD8a","CD34","CD105","CD49d","CD20","CD25","CD66b",
+                   "CD49f","CD45RO","CD90","CD45","CD195","CD38","CD196","CD135","CD56")
+col.names.info <- c('type','type','type','type','type','state','type','type',
+                        'state','type','state','state','type','state','state','state',
+                        'state','state','state','state','state','state','type','state',
+                        'state','type','type','state','state','type','state','type',
+                        'state','type','state','type','state','type','state','state','type')
+
+params <- list(
+  # Direct download URL to Zenodo file that contains allCells_combined.RDa
+  # (Use the "Download" link for the file on Zenodo)
+  zenodo_url = "PASTE_ZENODO_DIRECT_DOWNLOAD_URL_HERE",
+
+  #EDIT HERE IF NEEDED
+  #data_path = "PASTE_LOCAL_DOWNLOAD_FILE_HERE",
+  data_path = paste('/Home/siv32/dkl081/Desktop/SMART/SMART_RAMMS_harmonised/Proteomics data analysis Normalized data.xlsx',sep =''),
+  
+  #EDIT HERE IF NEEDED
+  out_base = "outputs/SMARTMS_publication",
+
+  # Baseline definition for SMART-MS in your original notebook
+  cohort = "SMART",
+  timepoints = c("V4","V8","V10"),
+  baseline_timePoint = "V4",
+  baseline_label = "BL"
+
+)
+
+# -----------------------------
+# Helpers
+# -----------------------------
+ensure_dir <- function(path) {
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+}
+
+download_if_missing <- function(url, dest_path) {
+  if (file.exists(dest_path)) return(invisible(dest_path))
+  ensure_dir(dirname(dest_path))
+  message("Downloading dataset from Zenodo...")
+  utils::download.file(url, destfile = dest_path, mode = "wb", quiet = FALSE)
+  message("Saved to: ", dest_path)
+  invisible(dest_path)
+}
+
+# Output directories for this figure
+dirs <- list(
+  figures = file.path(params$out_base, "figures", "fig5"),
+  tables  = file.path(params$out_base, "tables",  "fig5"),
+  qc      = file.path(params$out_base, "qc",      "fig5")
+)
+lapply(dirs, ensure_dir)
+
+# Colors for time points (as in your original notebook)
+color_TimePoints <- c("deepskyblue2", "magenta2", "indianred2")
+names(color_TimePoints) <- params$timepoints
+
+set.seed(params$seed)
+```
+
+
+### Load cleaned proteomics data (Zenodo → local)
+```{r}
+download_if_missing(params$zenodo_url, params$data_path)
+df <- readxl::read_excel(params$data_path, sheet = 1)
+stopifnot(exists("df"))
+
+#manipulate the data
+colRenaming <- c('S1','S1',
+                 'S4','S4',
+                 'S7','S7',
+                 'S10','S10',
+                 'S13','S13',
+                 'S16','S16',
+                 'S2','S2',
+                 'S5','S5',
+                 'S8','S8',
+                 'S11','S11',
+                 'S14','S14',
+                 'S17','S17',
+                 'S3','S3',
+                 'S6','S6',
+                 'S9','S9',
+                 'S12','S12',
+                 'S15','S15',
+                 'S18','S18')
+
+colTimePoint <- c('V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8',
+                  'V4','V8')
+
+a <- as.data.frame(t(df))
+dt <- data.frame(Patient=colRenaming,
+                 timePoint=colTimePoint)
+proteinData <- cbind(dt,a[3:38,])
+colnames(proteinData)[3:1327] <- df$Accession
+proiteinFullNames <- df$Description
+
+```
+
+
+### Clinical design metadata 
+```{r}
+
+############################### trial info about time points ############################### 
+df_trial_V4 <- data.frame(Patient=cfg$patientLevels_SMART,
+                         Treatment=c('Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline','Baseline',
+                               'Baseline','Baseline',
+                               'Baseline',
+                               'Baseline','Baseline',
+                               'Baseline','Baseline','Baseline',
+                               'Baseline'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                       Period=c('0','0',
+                               '0','0',
+                               '0','0',
+                               '0','0','0',
+                               '0','0',
+                               '0',
+                               '0','0',
+                               '0','0','0',
+                               '0'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+
+df_trial_V8 <- data.frame(Patient=cfg$patientLevels_SMART,
+                         Treatment=c('Control','Control',
+                               'MSC','MSC',
+                               'Control','Control',
+                               'MSC','MSC','MSC',
+                               'Control','Control',
+                               'MSC',
+                               'Control','Control',
+                               'MSC','MSC','MSC',
+                               'Control'),
+                       Sex=c('Male','Male',
+                             'Male','Female',
+                             'Female','Female',
+                             'Female','Female',
+                             'Male','Female',
+                             'Male','Male',
+                             'Female','Male',
+                             'Male','Female',
+                             'Female','Female'),
+                        Period=c('1','1',
+                               '1','1',
+                               '1','1',
+                               '1','1','1',
+                               '1','1',
+                               '1',
+                               '1','1',
+                               '1','1','1',
+                               '1'),
+                       Age=c(45,46,
+                             53,42,
+                             49,43,
+                             51,46,
+                             42,41,
+                             52,47,
+                             54,50,
+                             45,40,
+                             48,46),
+                       Sequence=c('Control_first','Control_first',
+                               'MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first',
+                               'Control_first','Control_first',
+                               'MSC_first','MSC_first','MSC_first',
+                               'Control_first'))
+```
+
+
+### Dimensionality reduction and visualisation of the full proteome
+```{r PCA,cache=TRUE,echo=FALSE}
+
+# --- 1A) Make one metadata table with both timepoints
+meta_V4 <- df_trial_V4 %>%
+  mutate(timePoint = "V4")
+
+meta_V8 <- df_trial_V8 %>%
+  mutate(timePoint = "V8")
+
+meta_all <- bind_rows(meta_V4, meta_V8) %>%
+  # keep only the columns we need (add more if you want)
+  select(Patient, timePoint, Treatment, Sex, Period, Age, Sequence)
+
+# --- 1B) Attach metadata to proteinData
+# proteinData has Patient + timePoint, then proteins
+dat <- proteinData %>%
+  left_join(meta_all, by = c("Patient", "timePoint"))
+
+# Identify protein columns = everything AFTER Patient + timePoint
+# (We will exclude the clinical columns we added via join)
+protein_cols <- setdiff(
+  colnames(dat),
+  c("Patient","timePoint","Treatment","Sex","Period","Age","Sequence")
+)
+
+X <- dat %>%
+  select(all_of(protein_cols)) %>%
+  as.matrix()
+# rownames for nice plotting/tracking
+rownames(X) <- paste(dat$Patient, dat$timePoint, sep = "_")
+
+# Minimal NA handling for PCA/UMAP:
+# Replace NA with protein-wise median (simple + transparent for landscape plots)
+for (j in seq_len(ncol(X))) {
+  nas <- is.na(X[, j])
+  if (any(nas)) X[nas, j] <- median(X[, j], na.rm = TRUE)
+}
+
+#weird R convertions
+X_num <- apply(X, 2, function(col) as.numeric(gsub(",", ".", col)))
+X_num <- as.matrix(X_num)
+X <- X_num
+
+
+########################################################## PCA
+
+pca <- prcomp(X, center = TRUE, scale. = TRUE)
+library(tibble)
+pca_df <- as.data.frame(pca$x[, 1:2]) %>%
+  rownames_to_column("SampleID") %>%
+  mutate(
+    Patient   = dat$Patient,
+    timePoint = dat$timePoint,
+    Treatment = dat$Treatment,
+    Sex       = dat$Sex,
+    Age       = dat$Age
+  )
+
+var1 <- round(100 * (pca$sdev[1]^2 / sum(pca$sdev^2)), 1)
+var2 <- round(100 * (pca$sdev[2]^2 / sum(pca$sdev^2)), 1)
+
+pca_df[pca_df$timePoint=='V4','timePoint'] <- 'BL'
+pca_df[pca_df$timePoint=='V8','timePoint'] <- '6m'
+pca_df$timePoint <- factor(pca_df$timePoint,levels = c('BL','6m'))
+
+o <- ggplot(pca_df, aes(PC1, PC2, color = Treatment, shape = timePoint,group=Patient)) +
+  geom_point(size = 3.2, alpha = 0.9) +
+  geom_line(color = 'black', alpha = 0.25,linewidth=0.2) +
+  # Patient ID labels (repelled so they don't overlap)
+  geom_text_repel(
+    aes(label = Patient),
+    size = 3.2,
+    max.overlaps = 20,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = c(
+    "Baseline" = "grey70",
+    "Control"  = "royalblue3",
+    "MSC"      = "khaki3"
+  )) +
+  labs(
+    title = "CSF proteomics landscape - (PCA, Baseline → 6m)",
+    x = paste0("PC1 (", var1, "%)"),
+    y = paste0("PC2 (", var2, "%)"),
+    color = "Treatment",
+    shape = "Time point"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "bottom"
+  )
+
+ggsave(file.path(dirs$figures, "Figure_5_PCA.pdf"), o, width = 12, height = 9)
+
+####################################################### UMAP
+
+set.seed(1)
+um <- umap(X, random_state=123, verbose =T)
+umap_df <- as.data.frame(um$layout) %>%
+  setNames(c("UMAP1","UMAP2")) %>%
+  mutate(
+    SampleID  = rownames(X),
+    Patient   = dat$Patient,
+    timePoint = dat$timePoint,
+    Treatment = dat$Treatment,
+    Sex       = dat$Sex,
+    Age       = dat$Age
+  )
+
+umap_df[umap_df$timePoint=='V4','timePoint'] <- 'BL'
+umap_df[umap_df$timePoint=='V8','timePoint'] <- '6m'
+umap_df$timePoint <- factor(umap_df$timePoint,levels = c('BL','6m'))
+
+o <- ggplot(umap_df, aes(UMAP1, UMAP2, color = Treatment, shape = timePoint,group=Patient)) +
+  geom_point(size = 3.2, alpha = 0.9) +
+  geom_line(color = 'black', alpha = 0.25,linewidth=0.2) +
+  # Patient ID labels (repelled so they don't overlap)
+  geom_text_repel(
+    aes(label = Patient),
+    size = 3.2,
+    max.overlaps = 20,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = c(
+    "Baseline" = "grey70",
+    "Control"  = "royalblue3",
+    "MSC"      = "khaki3"
+  )) +
+  labs(
+    title = "CSF proteomics landscape - (UMAP, Baseline → 6m)",
+    color = "Treatment",
+    shape = "Time point"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "bottom"
+  )
+
+
+ggsave(file.path(dirs$figures, "Figure_5_UMAP.pdf"), o, width = 12, height = 9)
+
+########################################################## MDS
+# Euclidean distance between samples
+d <- dist(X)
+
+# Classical MDS
+mds <- cmdscale(d, k = 2)
+
+mds_df <- as.data.frame(mds) %>%
+  setNames(c("MDS1", "MDS2")) %>%
+  rownames_to_column("SampleID") %>%
+  mutate(
+    Patient   = dat$Patient,
+    timePoint = dat$timePoint,
+    Treatment = dat$Treatment,
+    Sex       = dat$Sex,
+    Age       = dat$Age
+  )
+
+mds_df[mds_df$timePoint=='V4','timePoint'] <- 'BL'
+mds_df[mds_df$timePoint=='V8','timePoint'] <- '6m'
+mds_df$timePoint <- factor(mds_df$timePoint,levels = c('BL','6m'))
+
+o <- ggplot(mds_df, aes(MDS1, MDS2, color = Treatment, shape = timePoint,group=Patient)) +
+  geom_point(size = 3.2, alpha = 0.9) +
+  geom_line(color = 'black', alpha = 0.25,linewidth=0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red", linewidth = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", linewidth = 0.3) +
+  # Patient ID labels (repelled so they don't overlap)
+  geom_text_repel(
+    aes(label = Patient),
+    size = 3.2,
+    max.overlaps = 20,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = c(
+    "Baseline" = "grey70",
+    "Control"  = "royalblue3",
+    "MSC"      = "khaki3"
+  )) +
+  labs(
+    title = "CSF proteomics landscape - (MDS, Baseline → 6m)",
+    color = "Treatment",
+    shape = "Time point"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "bottom"
+  )
+
+ggsave(file.path(dirs$figures, "Figure_5_MDS.pdf"), o, width = 12, height = 9)
+
+```
+
+### Modelling - Compute Deltas V8-V4 and perform lm fit
+```{r differential modelling, echo=FALSE, cache=TRUE,eval=TRUE}
+
+proteinData <- data.frame(Patient=dat$Patient,
+                         timePoint=dat$timePoint,
+                         Treatment=dat$Treatment,
+                         Sex=dat$Sex,
+                         Period=dat$Period,
+                         Age=dat$Age,
+                         Sequence=dat$Sequence)
+
+proteinDat <- cbind(proteinData,X)
+
+proteinDat %>% dplyr::count(timePoint)
+proteinDat %>% distinct(Patient) %>% nrow()
+proteinDat %>% dplyr::count(Patient) %>% dplyr::count(n)
+
+#1
+meta_cols <- c("Patient","timePoint","Treatment","Sex","Period","Age","Sequence")
+protein_cols <- setdiff(colnames(proteinDat), meta_cols)
+
+#build table
+# Split baseline and 6m
+dat_V4 <- proteinDat %>% filter(timePoint == "V4")
+dat_V8 <- proteinDat %>% filter(timePoint == "V8")
+
+# Ensure same patient order
+dat_V4 <- dat_V4 %>% arrange(Patient)
+dat_V8 <- dat_V8 %>% arrange(Patient)
+stopifnot(all(dat_V4$Patient == dat_V8$Patient))
+
+#compute delta
+delta_mat <- dat_V8[, protein_cols] - dat_V4[, protein_cols]
+
+#assembe modelling table
+delta_table <- bind_cols(
+  dat_V8 %>% select(Patient, Treatment, Sex, Age),
+  delta_mat
+)
+
+#sanity checks
+dim(delta_table)     # should be 18 x (4 + 1325)
+table(delta_table$Treatment)
+summary(as.matrix(delta_table[, protein_cols]))
+
+#distribution overview - just for sanity
+hist(as.numeric(as.matrix(delta_table[, protein_cols])), 
+     breaks = 100, main = "Distribution of Δ values")
+
+
+###### modelling starts here
+# Make sure types are correct
+delta_table <- delta_table %>%
+  mutate(
+    Age_c = scale(Age, center = TRUE, scale = FALSE)[,1],
+    Treatment = factor(Treatment, levels = c("Control","MSC")),
+    Sex = factor(Sex)
+  )
+
+#modelling function
+model_results <- lapply(protein_cols, function(p) {
+  
+  df <- delta_table %>%
+    select(Treatment, Age_c, Sex, all_of(p)) %>%
+    rename(y = all_of(p))
+  
+  fit <- lm(y ~ Treatment + Age_c + Sex, data = df)
+  
+  broom::tidy(fit) %>%
+    filter(term == "TreatmentMSC") %>%
+    mutate(Protein = p)
+})
+
+results <- bind_rows(model_results)
+
+results <- results %>%
+  mutate(FDR = p.adjust(p.value, method = "BH"))
+
+
+results <- results %>%
+  mutate(
+    direction = ifelse(estimate > 0, "Up in MSC", "Down in MSC"),
+    logP = -log10(p.value),
+    logFDR = -log10(FDR)
+  )
+
+
+sig_005 <- results %>% filter(FDR < 0.05)
+sig_01  <- results %>% filter(FDR < 0.1)
+
+ranked_list <- results %>%
+  arrange(desc(estimate)) %>%
+  select(Protein, estimate)
+
+#sanity checks
+summary(results$estimate)
+summary(results$p.value)
+sum(results$FDR < 0.05)
+
+head(results[order(results$p.value), ], 10)
+
+###########################################################################################################
+#Volcano with annotation
+###########################################################################################################
+# Bioconductor annotation packages
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+if (!requireNamespace("AnnotationDbi", quietly = TRUE)) BiocManager::install("AnnotationDbi")
+if (!requireNamespace("org.Hs.eg.db", quietly = TRUE)) BiocManager::install("org.Hs.eg.db")
+
+## ---------------------------
+## 1) Build volcano_df (with significance class)
+## ---------------------------
+volcano_df <- results %>%
+  mutate(
+    sig = case_when(
+      FDR < 0.05 ~ "FDR < 0.05",
+      FDR < 0.10 ~ "FDR < 0.10",
+      TRUE ~ "NS"
+    ),
+    # remove isoform suffix if present, e.g. P12345-2 -> P12345
+    Protein_clean = sub("-\\d+$", "", Protein)
+  )
+
+## ---------------------------
+## 2) Map UniProt -> Gene symbol using org.Hs.eg.db (offline)
+## ---------------------------
+ids_clean <- unique(volcano_df$Protein_clean)
+ids_clean <- ids_clean[!is.na(ids_clean) & ids_clean != ""]
+
+mapping <- AnnotationDbi::select(
+  org.Hs.eg.db,
+  keys = ids_clean,
+  keytype = "UNIPROT",
+  columns = c("SYMBOL")
+)
+
+# Keep one symbol per UniProt (if multiple appear, keep the first)
+mapping_one <- mapping %>%
+  filter(!is.na(SYMBOL), SYMBOL != "") %>%
+  distinct(UNIPROT, .keep_all = TRUE)
+
+## ---------------------------
+## 3) Attach gene symbols + create final label
+## ---------------------------
+volcano_df <- volcano_df %>%
+  left_join(mapping_one, by = c("Protein_clean" = "UNIPROT")) %>%
+  mutate(
+    label = ifelse(is.na(SYMBOL) | SYMBOL == "", Protein, SYMBOL)
+  )
+
+## ---------------------------
+## 4) (Optional) quick mapping sanity checks
+## ---------------------------
+cat("Mapped fraction:",
+    mean(!(is.na(volcano_df$SYMBOL) | volcano_df$SYMBOL == "")),
+    "\n")
+
+# Show some examples
+#print(volcano_df %>% select(Protein, Protein_clean, SYMBOL, label) %>% distinct() %>% head(20))
+# set your effect threshold for "big effect"
+effect_cut <- 1
+
+## LIST OF KNOWN CONTAMINATION GENES
+contam_genes <- c(
+  "HBA1","HBB","VIM","TUBB2A","TUBA1A","HSPB1",
+  "KRT1","KRT9","KPRP","PLEC","DSG1","DSP","AHNAK",
+  "JUP","EEF2","CA3","DCD"
+)
+
+volcano_df2 <- volcano_df %>%
+  mutate(
+    is_big = abs(estimate) >= effect_cut,
+    is_contam = label %in% contam_genes,  # uses gene symbols (your 'label' column)
+    class = case_when(
+      FDR < 0.05 ~ "FDR < 0.05",
+      FDR < 0.10 ~ "FDR < 0.10",
+      #is_big & is_contam ~ "Contamination/housekeeping",
+      #is_big ~ paste0("High effect (|β| ≥ ", effect_cut, ")"),
+      TRUE ~ "NS"
+    )
+  )
+
+label_df <- volcano_df2 %>%
+  filter(FDR < 0.10 | (abs(estimate) >= effect_cut & is_contam))
+
+write_xlsx(label_df, file.path(dirs$tables, "Volcano_labeled_proteins.xlsx"))
+
+o <- ggplot(volcano_df2, aes(estimate, logP)) +
+  geom_point(aes(color = class), alpha = 0.85, size = 2.8) +
+  
+  # Thresholds
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed",color='red3') +
+  geom_hline(yintercept = -log10(0.10), linetype = "dotted",color='red3') +
+  geom_vline(xintercept = c(-effect_cut, effect_cut), linetype = "dashed",color='red3') +
+  
+  # Labels
+  geom_text_repel(
+    data = label_df,
+    aes(label = label),
+    size = 4,
+    max.overlaps = Inf
+  ) +
+  
+  scale_color_manual(values = c(
+    "FDR < 0.05" = "#D62728",
+    "FDR < 0.10" = "#FF7F0E",
+    "Contamination/housekeeping" = "#1F77B4",
+    "NS" = "grey75")) +
+  labs(
+    x = "MSC effect on Delta protein (log2 scale)",
+    y = expression(-log[10](p)),
+    title = "Volcano plot — MSC effect on CSF proteome",
+    color = "Category"
+  ) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+
+
+ggsave(file.path(dirs$figures, "Figure_5_Volcano.pdf"), o, width = 12, height = 9)
+
+```
+
+### Visualisation of patients stratified by clinical reactivity
+```{r combined stratification, echo=FALSE, cache=TRUE,eval=TRUE}
+
+#clinical adverse events and MRI findings
+MSC_reactivity <- data.frame(Patient=cfg$patientLevels_SMART,
+                             Fever_Pain=c(NA,
+                                          'No',
+                                          'Yes',
+                                          'Yes',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'Yes',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'Yes',
+                                          'No',
+                                          'No',
+                                          'Yes',
+                                          'No',
+                                          'Yes',
+                                          'No'),
+                             MRI_events=c(NA,
+                                          'No',
+                                          'Yes',
+                                          'Yes',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'No',
+                                          'Yes',
+                                          'No',
+                                          'No',
+                                          'No')
+                             )
+
+
+
+# Merge adverse events into delta_table
+delta_annot <- delta_table %>%
+  left_join(MSC_reactivity %>% dplyr::select(Patient, Fever_Pain,MRI_events), by = "Patient") %>%
+  mutate(
+    Group = case_when(
+      Treatment == "MSC" & Fever_Pain == "Yes" &   MRI_events == 'No'  ~ "MSC + AE no MRI",
+      Treatment == "MSC" & Fever_Pain == "No"  &   MRI_events == 'No'  ~ "MSC no AE no MRI",
+      Treatment == "MSC" & Fever_Pain == 'Yes' &   MRI_events == 'Yes' ~ "MSC + AE + MRI",
+      Treatment == "Control" ~ "Control",
+      
+    ),
+    Group = factor(Group, levels = c("Control",'MSC no AE no MRI',"MSC + AE no MRI",'MSC + AE + MRI'))
+  )
+
+#remove patient S1
+delta_annot <- delta_annot[-1,]
+
+#pick the proteins of interest
+hits_01 <- volcano_df %>%
+  filter(FDR < 0.10) %>%
+  distinct(Protein_clean, SYMBOL, FDR, estimate, sig)
+hits <- hits_01
+
+plot_df <- delta_annot %>%
+  dplyr::select(Patient, Treatment, Sex, Age, Group, all_of(hits$Protein_clean)) %>%
+  pivot_longer(
+    cols = all_of(hits$Protein_clean),
+    names_to = "Protein_clean",
+    values_to = "Delta"
+  ) %>%
+  left_join(hits %>% dplyr::select(Protein_clean, SYMBOL, FDR), by = "Protein_clean") %>%
+  mutate(
+    SYMBOL = ifelse(is.na(SYMBOL) | SYMBOL == "", Protein_clean, SYMBOL),
+    SYMBOL = fct_reorder(SYMBOL, Delta, .fun = median, .na_rm = TRUE)
+  )
+
+#5) Targeted visualisation #2: Rank proteins by volcano effect, then facet
+order_vec <- hits %>% arrange(FDR) %>% pull(SYMBOL)
+
+plot_df2 <- plot_df %>%
+  mutate(SYMBOL = factor(as.character(SYMBOL), levels = order_vec))
+
+
+# --- Define colors ---
+group_cols <- c(
+  "Control"   = "royalblue3",
+  "MSC no AE no MRI" = "khaki",
+  "MSC + AE no MRI"  = "khaki3",
+  "MSC + AE + MRI"  = "khaki4"
+)
+
+ae_cols <- c("No" = "grey25", "Yes" = "firebrick3")
+p_delta_ordered <- ggplot(plot_df2, aes(x = Group, y = Delta)) +
+      geom_hline(yintercept = 0, linetype = "dashed", color='red',alpha = 0.5) +
+      
+      # Boxplots colored by Group
+      geom_boxplot(aes(fill = Group), 
+                   outlier.shape = NA, 
+                   width = 0.38, 
+                   alpha = 0.48,
+                   notch = FALSE) +
+      
+      # Points: AE highlighted by color
+      geom_point(
+        aes(color = 'gray88'),
+        size = 1.18, alpha = 0.68,
+        position = position_jitter(width = 0.12, height = 0)
+      ) +
+      geom_text(
+        data = subset(plot_df2, Treatment != "Control"),
+        aes(label = Patient),
+        size = 1.4,
+        vjust = -0.5
+      )+
+
+      facet_wrap(~ SYMBOL, scales = "free_y", ncol = 4) +
+      scale_fill_manual(values = group_cols) +
+      scale_color_manual(values = ae_cols) +
+      labs(
+        x = NULL,
+        y = expression(Delta~"(6m - BL)"),
+        title = "Differentially enriched CSF proteins",
+        #subtitle = "Boxplots by group; patients highlighted and labeled",
+        fill = "Group",
+        color = "Reactivity"
+      ) +
+      theme_classic() +
+      theme(
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.background = element_rect(fill = "grey95", color = NA),
+        strip.text = element_text(face = "bold"),
+        aspect.ratio = 0.8
+  )
+
+ggsave(file.path(dirs$figures, "Expression_diffGenes.pdf"), p_delta_ordered, width = 12, height = 9)
+
+################################################################################
+#contamination 
+################################################################################
+
+contam_genes <- c(
+  "HBA1","KPRP","KRT9","KRT1","PLEC",
+  "HBB","VIM","DCD","DSP")
+
+contam_hits <- volcano_df %>%
+  filter(SYMBOL %in% contam_genes) %>%
+  distinct(Protein_clean, SYMBOL) %>%
+  arrange(match(SYMBOL, contam_genes))
+
+# keep only those that exist in delta_table
+contam_hits <- contam_hits %>%
+  filter(Protein_clean %in% colnames(delta_table))
+
+contam_plot_df <- delta_annot %>%
+  dplyr::select(Patient, Treatment, Sex, Age, Group, all_of(contam_hits$Protein_clean)) %>%
+  pivot_longer(
+    cols = all_of(contam_hits$Protein_clean),
+    names_to = "Protein_clean",
+    values_to = "Delta"
+  ) %>%
+  left_join(contam_hits, by = "Protein_clean") %>%
+  mutate(
+    SYMBOL = factor(SYMBOL, levels = contam_genes[contam_genes %in% unique(SYMBOL)])
+  )
+
+p_contam <- ggplot(contam_plot_df, aes(x = Group, y = Delta)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color='red',alpha = 0.5) +
+  
+  # Boxplots colored by Group
+  geom_boxplot(aes(fill = Group), 
+               outlier.shape = NA, 
+               width = 0.38, 
+               alpha = 0.48,
+               notch = FALSE) +
+  
+  # Points: AE highlighted by color
+  geom_point(
+    aes(color = 'gray88'),
+    size = 1.18, alpha = 0.68,
+    position = position_jitter(width = 0.12, height = 0)
+  ) +
+  geom_text(
+    data = subset(contam_plot_df, Treatment != "Control"),
+    aes(label = Patient),
+    size = 1.4,
+    vjust = -0.5
+  )+
+  
+  facet_wrap(~ SYMBOL, scales = "free_y", ncol = 3) +
+  scale_fill_manual(values = group_cols) +
+  scale_color_manual(values = ae_cols) +
+  labs(
+    x = NULL,
+    y = expression(Delta~"(6m - BL)"),
+    title = "Contamination/high-effect markers: CSF protein changes by group",
+    #subtitle = "Boxplots by group; patients highlighted and labeled",
+    fill = "Group",
+    color = "Reactivity"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey95", color = NA),
+    strip.text = element_text(face = "bold"),
+    aspect.ratio = 0.8
+  )
+
+ggsave(file.path(dirs$figures, "Expression_ContamGenes.pdf"), p_contam, width = 12, height = 9)
+
+################################################################################
+#inflamation
+################################################################################
+csf_inflam_genes <- c(
+  "CRP", "SAA1", "SAA2", "HP", "ORM1", "ORM2",
+  "FGA", "FGB", "FGG", "SERPINA1", "SERPINA3",
+  "C3", "C4A", "C4B","IL6ST","LGALS3","A2M"
+)
+
+inflam_hits <- volcano_df %>%
+  filter(SYMBOL %in% csf_inflam_genes) %>%
+  distinct(Protein_clean, SYMBOL) %>%
+  arrange(match(SYMBOL, csf_inflam_genes))
+
+# keep only those that exist in delta_table
+inflam_hits <- inflam_hits %>%
+  filter(Protein_clean %in% colnames(delta_table))
+
+inflam_plot_df <- delta_annot %>%
+  dplyr::select(Patient, Treatment, Sex, Age, Group, all_of(inflam_hits$Protein_clean)) %>%
+  pivot_longer(
+    cols = all_of(inflam_hits$Protein_clean),
+    names_to = "Protein_clean",
+    values_to = "Delta"
+  ) %>%
+  left_join(inflam_hits, by = "Protein_clean") %>%
+  mutate(
+    SYMBOL = factor(SYMBOL, levels = csf_inflam_genes[csf_inflam_genes %in% unique(SYMBOL)])
+  )
+
+p_inflam <- ggplot(inflam_plot_df, aes(x = Group, y = Delta)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color='red',alpha = 0.5) +
+  
+  # Boxplots colored by Group
+  geom_boxplot(aes(fill = Group), 
+               outlier.shape = NA, 
+               width = 0.38, 
+               alpha = 0.48,
+               notch = FALSE) +
+  geom_point(
+    aes(color = 'gray88'),
+    size = 1.18, alpha = 0.68,
+    position = position_jitter(width = 0.12, height = 0)
+  ) +
+  geom_text(
+    data = subset(inflam_plot_df, Treatment != "Control"),
+    aes(label = Patient),
+    size = 1.4,
+    vjust = -0.5
+  )+
+  facet_wrap(~ SYMBOL, scales = "free_y", ncol = 4) +
+  scale_fill_manual(values = group_cols) +
+  scale_color_manual(values = ae_cols) +
+  labs(
+    x = NULL,
+    y = expression(Delta~"(6m - BL)"),
+    title = "Inflammation markers: CSF protein changes by group",
+    #subtitle = "Boxplots by group; patients highlighted and labeled",
+    fill = "Group",
+    color = "Reactivity"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_rect(fill = "grey95", color = NA),
+    strip.text = element_text(face = "bold"),
+    aspect.ratio = 0.8
+  )
+
+ggsave(file.path(dirs$figures, "Expression_inflamGenes.pdf"), p_inflam, width = 12, height = 9)
+
+
+```
+
+
+### Pathway based analysis using GO
+```{r GSEA, echo=FALSE, cache=TRUE,eval=TRUE}
+
+ranked_list <- results %>%
+  dplyr::select(Protein, estimate) %>%
+  dplyr::arrange(desc(estimate))
+
+# Convert UniProt → Gene Symbol (use your mapped volcano_df)
+ranked_list <- ranked_list %>%
+  dplyr::left_join(volcano_df %>% 
+          dplyr::select(Protein, label), by = "Protein") %>%
+  dplyr::distinct(label, .keep_all = TRUE) %>%
+  dplyr::filter(!is.na(label))
+
+# Named vector for GSEA
+gene_ranks <- ranked_list$estimate
+names(gene_ranks) <- ranked_list$label
+
+# Sort decreasing
+gene_ranks <- sort(gene_ranks, decreasing = TRUE)
+
+gsea_go <- gseGO(
+  geneList = gene_ranks,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  keyType = "SYMBOL",
+  minGSSize = 10,
+  maxGSSize = 300,
+  pvalueCutoff = 0.1,
+  verbose = FALSE
+)
+
+#default visualisation
+dotplot(gsea_go, showCategory = 15, title = "GSEA – GO Biological Process")
+#dotplot(gsea_react, showCategory = 15, title = "GSEA – Reactome")
+#BiocManager::install("enrichplot", ask = FALSE)
+
+gseaplot2(gsea_go, geneSetID = 1, title = gsea_go@result$Description[1])
+#examine the pathways
+a <- head(gsea_go@result[, c("Description","NES","p.adjust")], 15)
+
+################################# make the first plot with all proteins included
+# ---- 0) Extract result table from gseGO object
+dfp <- as.data.frame(gsea_go@result)
+# ---- 1) Clean Description + compute leading-edge support
+dfp <- dfp %>%
+  mutate(
+    Description = Description %>%
+      str_replace_all("[\r\n]+", " ") %>%  # remove line breaks
+      str_replace_all("\u2212|\u2010|\u2011|\u2012|\u2013|\u2014", "-") %>% # normalize unicode hyphens
+      str_squish(),                        # trim + collapse spaces
+    
+    # Leading-edge genes are stored as "GENE1/GENE2/..."
+    LeadingEdgeCount = ifelse(
+      is.na(core_enrichment) | core_enrichment == "",
+      0L,
+      str_count(core_enrichment, "/") + 1L
+    ),
+    
+    LeadingEdgeRatio = ifelse(setSize > 0, LeadingEdgeCount / setSize, NA_real_)
+  ) %>%
+  # drop any rows with missing descriptions just in case
+  filter(!is.na(Description), Description != "")
+
+# ---- 2) Select top 15 terms by pathway FDR
+top_n <- 20
+dfp_top <- dfp %>%
+  arrange(p.adjust) %>%
+  slice_head(n = top_n)
+
+# ---- 3) Assign modules (your story grouping)
+dfp_top <- dfp_top %>%
+  mutate(
+    Module = case_when(
+      str_detect(str_to_lower(Description), "microtubule|cytoskeleton|tubulin|actin") ~ "Cytoskeletal remodeling",
+      str_detect(str_to_lower(Description), "nucleobase|nucleotide|purine|phosphate|nucleoside") ~ "Nucleotide metabolism",
+      str_detect(str_to_lower(Description), "carboxylic|oxoacid|organic acid|monocarboxylic") ~ "Organic acid metabolism",
+      str_detect(str_to_lower(Description), "platelet|hemost|coagulat|acute-phase") ~ "Vascular / inflammatory interface",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  # ---- 4) Order pathways nicely: first by Module, then by NES within Module
+  group_by(Module) %>%
+  mutate(Description = fct_reorder(Description, NES)) %>%
+  ungroup() %>%
+  mutate(
+    # order facets in a logical narrative order
+    Module = factor(
+      Module,
+      levels = c("Vascular / inflammatory interface",
+                 "Cytoskeletal remodeling",
+                 "Nucleotide metabolism",
+                 "Organic acid metabolism",
+                 "Other")
+    )
+  )
+
+dfp_top <- dfp_top %>% mutate(Description = str_wrap(as.character(Description), width = 35))
+
+# Cap extremely small p.adjust to keep legend useful
+dfp_top <- dfp_top %>%
+  mutate(padj_cap = pmax(p.adjust, 1e-6))
+
+o <- ggplot(dfp_top, aes(x = NES, y = reorder(Description, NES))) +
+  geom_point(aes(size = LeadingEdgeCount, color = padj_cap), alpha = 0.9) +
+  facet_grid(Module ~ ., scales = "free_y", space = "free_y", switch = "y") +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_color_continuous(
+    trans = "log10",
+    breaks = c(1e-6, 1e-4, 1e-3, 1e-2, 5e-2, 1e-1),
+    labels = scales::label_scientific(digits = 1),
+    guide = guide_colorbar(
+      barheight = unit(4, "mm"),
+      barwidth  = unit(45, "mm"),
+      title.position = "top"
+    )
+  ) +
+  scale_size_continuous(
+    range = c(2.2, 7.5),
+    breaks = scales::pretty_breaks(n = 4),
+    guide = guide_legend(
+      title.position = "top",
+      override.aes = list(alpha = 1)
+    )
+  ) +
+  labs(
+    title = "GO GSEA: MSC-associated CSF programs",
+    x = "NES (Normalized Enrichment Score)",
+    y = NULL,
+    size = "Leading-edge count",
+    color = "FDR (p.adjust)"
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_bw(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    legend.box = "vertical",
+    legend.title = element_text(size = 11),
+    legend.text  = element_text(size = 10),
+    
+    # Facet strips on the left, clean and readable
+    strip.placement = "outside",
+    strip.text.y.left = element_text(angle = 0, face = "bold", size = 11),
+    strip.background = element_blank(),
+    
+    # Make it compact
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing.y = unit(0.25, "lines"),
+    
+    # Improve label readability
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 11),
+    
+    plot.title = element_text(face = "bold", size = 15),
+    plot.margin = margin(8, 18, 8, 8)
+  )
+
+
+ggsave(file.path(dirs$figures, "Figure_5_GO_all_ordered.pdf"), o, width = 12, height = 9)
+
+##########################################################################################
+#remove known contaminants
+##########################################################################################
+contam_tier1 <- c("HBA1","HBB","KRT1","KRT9","KPRP","DSG1","DCD")
+contam_tier2 <- c("PLEC","DSP","AHNAK","JUP","CA3")
+contam_all <- unique(c(contam_tier1, contam_tier2))
+
+gene_ranks_clean <- gene_ranks[ !names(gene_ranks) %in% contam_all ]
+
+# sanity check
+length(gene_ranks)        # before
+length(gene_ranks_clean)  # after
+
+gsea_go_clean <- gseGO(
+  geneList = gene_ranks_clean,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  keyType = "SYMBOL",
+  minGSSize = 10,
+  maxGSSize = 300,
+  pvalueCutoff = 0.1,
+  verbose = FALSE
+)
+
+####check the first 20 !!!
+a <- head(gsea_go@result[, c("Description","NES","p.adjust")], 20)
+b <- head(gsea_go_clean@result[, c("Description","NES","p.adjust")], 20)
+
+p1 <- dotplot(gsea_go, showCategory = 20) + ggtitle("All proteins")
+p2 <- dotplot(gsea_go_clean, showCategory = 20) + ggtitle("After contaminant removal")
+#p1 + p2
+
+####################################################################
+# ---- 0) Extract result table from gseGO object
+dfp <- as.data.frame(gsea_go_clean@result)
+
+# ---- 1) Clean Description + compute leading-edge support
+dfp <- dfp %>%
+  mutate(
+    Description = Description %>%
+      str_replace_all("[\r\n]+", " ") %>%  # remove line breaks
+      str_replace_all("\u2212|\u2010|\u2011|\u2012|\u2013|\u2014", "-") %>% # normalize unicode hyphens
+      str_squish(),                        # trim + collapse spaces
+    
+    # Leading-edge genes are stored as "GENE1/GENE2/..."
+    LeadingEdgeCount = ifelse(
+      is.na(core_enrichment) | core_enrichment == "",
+      0L,
+      str_count(core_enrichment, "/") + 1L
+    ),
+    
+    LeadingEdgeRatio = ifelse(setSize > 0, LeadingEdgeCount / setSize, NA_real_)
+  ) %>%
+  # drop any rows with missing descriptions just in case
+  filter(!is.na(Description), Description != "")
+
+# ---- 2) Select top 15 terms by pathway FDR
+top_n <- 20
+dfp_top <- dfp %>%
+  arrange(p.adjust) %>%
+  slice_head(n = top_n)
+
+# ---- 3) Assign modules (your story grouping)
+dfp_top <- dfp_top %>%
+  mutate(
+    desc_l = str_to_lower(Description),
+    Module = case_when(
+      # 1) Cytoskeletal remodeling / intracellular organization
+      str_detect(desc_l,
+                 "microtubule|cytoskeleton|tubulin|actin|protein localization to nucleus|nucleus|response to heat") ~
+        "Cytoskeletal remodeling",
+
+      # 2) Nucleotide / nucleic acid / biosynthetic programs
+      str_detect(desc_l,
+                 "nucleobase|nucleotide|purine|nucleoside|nucleic acid|organophosphate|phosphate|biosynthetic|macromolecule biosynthetic") ~
+        "Nucleotide metabolism",
+
+      # 3) Organic acid / central carbon metabolism
+      str_detect(desc_l,
+                 "carboxylic|oxoacid|organic acid|monocarboxylic") ~
+        "Organic acid metabolism",
+
+      # 4) Vascular / inflammatory interface
+      str_detect(desc_l,
+                 "platelet|hemost|coagulat|acute-phase|acute inflammatory|inflamm") ~
+        "Vascular / inflammatory interface",
+
+      TRUE ~ "Other"
+    )
+  )  %>%
+  # ---- 4) Order pathways nicely: first by Module, then by NES within Module
+  group_by(Module) %>%
+  mutate(Description = fct_reorder(Description, NES)) %>%
+  ungroup() %>%
+  mutate(
+    # order facets in a logical narrative order
+    Module = factor(
+      Module,
+      levels = c("Vascular / inflammatory interface",
+                 "Cytoskeletal remodeling",
+                 "Nucleotide metabolism",
+                 "Organic acid metabolism",
+                 "Other")
+    )
+  )
+
+dfp_top <- dfp_top %>% mutate(Description = str_wrap(as.character(Description), width = 35))
+
+# Cap extremely small p.adjust to keep legend useful
+dfp_top <- dfp_top %>%
+  mutate(padj_cap = pmax(p.adjust, 1e-6))
+
+o <- ggplot(dfp_top, aes(x = NES, y = reorder(Description, NES))) +
+  geom_point(aes(size = LeadingEdgeCount, color = padj_cap), alpha = 0.9) +
+  facet_grid(Module ~ ., scales = "free_y", space = "free_y", switch = "y") +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_color_continuous(
+    trans = "log10",
+    breaks = c(1e-6, 1e-4, 1e-3, 1e-2, 5e-2, 1e-1),
+    labels = scales::label_scientific(digits = 1),
+    guide = guide_colorbar(
+      barheight = unit(4, "mm"),
+      barwidth  = unit(45, "mm"),
+      title.position = "top"
+    )
+  ) +
+  scale_size_continuous(
+    range = c(2.2, 7.5),
+    breaks = scales::pretty_breaks(n = 4),
+    guide = guide_legend(
+      title.position = "top",
+      override.aes = list(alpha = 1)
+    )
+  ) +
+  labs(
+    title = "GO GSEA: MSC-associated CSF programs",
+    x = "NES (Normalized Enrichment Score)",
+    y = NULL,
+    size = "Leading-edge count",
+    color = "FDR (p.adjust)"
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_bw(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    legend.box = "vertical",
+    legend.title = element_text(size = 11),
+    legend.text  = element_text(size = 10),
+    
+    # Facet strips on the left, clean and readable
+    strip.placement = "outside",
+    strip.text.y.left = element_text(angle = 0, face = "bold", size = 11),
+    strip.background = element_blank(),
+    
+    # Make it compact
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing.y = unit(0.25, "lines"),
+    
+    # Improve label readability
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 10),
+    
+    plot.title = element_text(face = "bold", size = 15),
+    plot.margin = margin(8, 18, 8, 8)
+  )
+
+ggsave(file.path(dirs$figures, "Figure_5_GO_filtered.pdf"), o, width = 12, height = 9)
+
+#show some extra plots
+#gseaplot2(gsea_go, geneSetID = 1, title = gsea_go@result$Description[1])
+sel_sets <- c(
+  "acute-phase response",
+  "platelet aggregation",
+  "cytoskeleton organization",
+  "microtubule-based process",
+  "nucleotide metabolic process"
+)
+
+p <- list()
+myC <- 1
+for (s in sel_sets) {
+  i <- which(gsea_go@result$Description == s)
+  p <- gseaplot2(gsea_go, geneSetID = i, title = s)
+  
+  myfile <- paste(file.path(dirs$figures,'Extra_gsea_p_'),i,'.pdf',sep ='')
+  ggsave(myfile, p, width = 12, height = 9)
+}
+
+```
+
+
+### Functional programs  and scores in CSF
+```{r functional programs, echo=FALSE, cache=TRUE,eval=TRUE}
+
+# 1) Identify protein columns (everything after metadata)
+meta_cols <- c("Patient", "Treatment", "Sex", "Age",'Age_c')
+prot_cols <- setdiff(colnames(delta_table), meta_cols)
+
+# 2) Clean UniProt IDs (remove isoform suffix like P12345-2)
+prot_cols_clean <- sub("-\\d+$", "", prot_cols)
+
+# 3) Map UniProt -> Gene symbol
+map <- AnnotationDbi::select(
+  org.Hs.eg.db,
+  keys = unique(prot_cols_clean),
+  keytype = "UNIPROT",
+  columns = c("SYMBOL")
+) %>%
+  filter(!is.na(SYMBOL), SYMBOL != "") %>%
+  distinct(UNIPROT, .keep_all = TRUE)
+
+# 4) Build a lookup for all your columns (including unmapped)
+lookup <- tibble(
+  Protein = prot_cols,
+  UNIPROT = prot_cols_clean
+) %>%
+  left_join(map, by = "UNIPROT") %>%
+  mutate(Gene = ifelse(is.na(SYMBOL) | SYMBOL == "", UNIPROT, SYMBOL))
+
+# Optional: how many mapped?
+cat("Mapped fraction:",
+    mean(!is.na(lookup$SYMBOL) & lookup$SYMBOL != ""),
+    "\n")
+
+#Helper to compute a program score from Δ values
+# Helper: score = mean(z-scored proteins) across a gene set
+score_program_from_delta <- function(delta_df, lookup, gene_set, meta_cols = c("Patient","Treatment","Sex","Age")) {
+  # Which protein columns correspond to these genes?
+  cols <- lookup %>%
+    filter(Gene %in% gene_set) %>%
+    pull(Protein) %>%
+    unique()
+
+  cols <- intersect(cols, colnames(delta_df))
+  if (length(cols) < 3) {
+    warning("Gene set has <3 proteins present in delta_table after mapping. Returning NA.")
+    out <- delta_df[, meta_cols, drop = FALSE]
+    out$score <- NA_real_
+    out$n_proteins <- length(cols)
+    return(out)
+  }
+
+  mat <- as.matrix(delta_df[, cols, drop = FALSE])
+
+  # Z-score each protein across patients (important so one protein doesn't dominate)
+  mat_z <- scale(mat)
+
+  score <- rowMeans(mat_z, na.rm = TRUE)
+
+  out <- delta_df[, meta_cols, drop = FALSE]
+  out$score <- score
+  out$n_proteins <- length(cols)
+  out
+}
+
+######################################## definitions of gene sets #################################
+genes_interface_ecm <- c(
+  "POSTN","SPARC","COMP",
+  "COL1A1","COL1A2","COL3A1","COL5A1","COL11A1","COL6A6",
+  "FN1","TNC","VCAN","LAMA2","LAMC1"
+)
+
+genes_innate_vascular <- c(
+  # Complement
+  "C3","C4A","C4B","C5","CFH","CFB",
+  # Acute-phase / innate
+  "CRP","SAA1","SAA2","HP","HPX","ORM1","ORM2","SERPINA1","SERPINA3","A2M","CP",
+  # Coagulation / vascular tone
+  "FGA","FGB","FGG"
+)
+
+genes_metcyto <- c(
+  # Cytoskeleton / actin dynamics
+  "CFL1","PFN1","ACTB","ACTG1",
+  # Microtubules / transport
+  "TUBA1A","TUBB2A","TUBB",
+  # Stress / protein synthesis
+  "HSPB1","EEF2"
+  # Optional if present
+  #"VIM"
+)
+
+#this is interesting to reflect tissue stress
+genes_procedural_stress <- c(
+  # Blood-derived
+  "HBA1", "HBB",
+  # Cytokeratins / epithelial
+  "KRT1", "KPRP",
+  # Junctional / epithelial scaffolds
+  "DSG1", "DSP", "JUP",
+  # Large structural scaffolds (released on damage)
+  "AHNAK",
+  # Muscle / erythrocyte-associated
+  "CA3",
+  # Skin / sweat associated
+  "DCD",
+  "VIM"
+)
+
+##################################################################################
+
+csf_interface_score <- score_program_from_delta(delta_table, lookup, genes_interface_ecm)
+csf_vascular_score   <- score_program_from_delta(delta_table, lookup, genes_innate_vascular)
+csf_metcyto_score   <- score_program_from_delta(delta_table, lookup, genes_metcyto)
+csf_stress_score   <- score_program_from_delta(delta_table, lookup, genes_procedural_stress)
+
+# Rename score columns for clarity
+csf_interface_score <- csf_interface_score %>% dplyr::rename(CSF_Interface = score, CSF_Interface_n = n_proteins)
+csf_vascular_score   <- csf_vascular_score %>% dplyr::rename(CSF_Vascular = score, CSF_Vascular_n = n_proteins)
+csf_metcyto_score   <- csf_metcyto_score %>% dplyr::rename(CSF_MetCytoskel = score, CSF_MetCytoskel_n = n_proteins)
+csf_stress_score   <- csf_stress_score %>% dplyr::rename(CSF_ProcedStress = score, CSF_ProcedStress_n = n_proteins)
+
+
+# Combine into one CSF program table
+csf_programs <- csf_interface_score %>%
+  left_join(csf_vascular_score %>% dplyr::select(Patient, CSF_Vascular, CSF_Vascular_n), by="Patient") %>%
+  left_join(csf_metcyto_score %>% dplyr::select(Patient, CSF_MetCytoskel, CSF_MetCytoskel_n), by="Patient") %>%
+  left_join(csf_stress_score %>% dplyr::select(Patient, CSF_ProcedStress, CSF_ProcedStress_n), by="Patient")
+
+#remove patient S1
+csf_programs <- csf_programs[-1,]
+
+
+plot_df <- csf_programs %>%
+  left_join(MSC_reactivity, by = "Patient") %>%
+  mutate(
+    Group = case_when(
+      Treatment == "Control" ~ "Control",
+      Treatment == "MSC" & Fever_Pain == "No" & MRI_events == "No" ~ "MSC no AE no MRI",
+      Treatment == "MSC" & Fever_Pain == "Yes" & MRI_events == "No" ~ "MSC + AE no MRI",
+      Treatment == "MSC" & Fever_Pain == "Yes" & MRI_events == "Yes" ~ "MSC + AE + MRI",
+      TRUE ~ NA_character_
+    ),
+    Group = factor(
+      Group,
+      levels = c(
+        "Control",
+        "MSC no AE no MRI",
+        "MSC + AE no MRI",
+        "MSC + AE + MRI"
+      )
+    )
+  )
+
+
+plot_long <- plot_df %>%
+  dplyr::select(Patient, Group,
+         CSF_Interface, CSF_Vascular, CSF_MetCytoskel,CSF_ProcedStress) %>%
+  tidyr::pivot_longer(
+    cols = starts_with("CSF_"),
+    names_to = "Program",
+    values_to = "Score"
+  ) %>%
+  mutate(
+    Program = recode(
+      Program,
+      CSF_Interface   = "CSF Interface/ECM",
+      CSF_Vascular    = "CSF Innate/Vascular",
+      CSF_MetCytoskel = "CSF Metabolic/Cytoskeletal",
+      CSF_ProcedStress = "CSF Procedural Stress"
+    )
+  )
+
+p_csf_programs <- ggplot(plot_long, aes(x = Group, y = Score)) +
+      geom_hline(yintercept = 0, linetype = "dashed", color='red',alpha = 0.4) +
+      geom_boxplot(
+        aes(fill = Group),
+        outlier.shape = NA,
+        width = 0.45,
+        alpha = 0.45
+      ) +
+      geom_point(
+        size = 1.48,
+        alpha = 0.68,
+        position = position_jitter(width = 0.12)
+      ) +
+      geom_text(
+        data = subset(plot_long, Group != "Control"),
+        aes(label = Patient),
+        size = 2.2,
+        vjust = -0.5
+      )+
+      facet_wrap(~ Program, scales = "free_y", nrow = 2) +
+      scale_fill_manual(
+        values = c(
+          "Control" = "royalblue3",
+          "MSC no AE no MRI" = "khaki",
+          "MSC + AE no MRI" = "khaki3",
+          "MSC + AE + MRI" = "khaki4"
+        )
+      ) +
+      labs(
+        x = NULL,
+        y = expression(Delta~"CSF program score (6m - BL)"),
+        #title = "CSF functional program responses stratified by MSC reactivity",
+        #subtitle = "Patients grouped by adverse events and MRI findings"
+      ) +
+      theme_classic(base_size = 12) +
+      theme(
+        legend.position = "none",
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 25, hjust = 1),
+        aspect.ratio = 0.68
+      )
+
+ggsave(file.path(dirs$figures, "Figure_5_CSF_scores.pdf"), p_csf_programs, width = 12, height = 9)
+
+###########################################################################################
+#scatter plot of scores colored by group
+
+o1 <- ggplot(plot_df,
+       aes(x = CSF_Vascular, y = CSF_Interface, color = Group)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_point(size = 3, alpha = 0.9) +
+  #geom_smooth(method = "lm", se = FALSE, linetype = "dotted") +
+  scale_color_manual(values = c(
+    "Control" = "royalblue3",
+    "MSC no AE no MRI" = "khaki",
+    "MSC + AE no MRI" = "khaki3",
+    "MSC + AE + MRI" = "khaki4"
+  )) +
+  xlim(-1.5,1.5)+
+  ylim(-1.5,1.5)+
+  theme_classic() +
+  labs(
+    x = "CSF vascular / inflammatory program",
+    y = "CSF interface / ECM remodeling program",
+    #title = "Decoupling of CSF interface remodeling from inflammatory stress",
+    #subtitle = "MSC induces structural remodeling with variable vascular activation"
+  )+
+  theme(legend.position = 'bottom')
+
+o2 <- ggplot(plot_df,
+       aes(x = CSF_Vascular, y = CSF_MetCytoskel, , color = Group)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_point(size = 3, alpha = 0.9) +
+  #geom_smooth(method = "lm", se = FALSE, linetype = "dotted") +
+  scale_color_manual(values = c(
+    "Control" = "royalblue3",
+    "MSC no AE no MRI" = "khaki",
+    "MSC + AE no MRI" = "khaki3",
+    "MSC + AE + MRI" = "khaki4"
+  )) +
+  xlim(-1.5,1.5)+
+  ylim(-1.5,1.5)+
+  theme_classic() +
+  labs(
+    x = "CSF vascular / inflammatory program",
+    y = "CSF Metabolic/Cytoskeletal",
+    #title = "Decoupling of CSF Metabolic/Cytoskeletal remodelling from inflammatory stress",
+    #subtitle = "MSC induces structural remodeling with variable vascular activation"
+  )+
+  theme(legend.position = 'bottom')
+
+ggsave(file.path(dirs$figures, "CSF_scores_scatter1.pdf"), o1, width = 12, height = 9)
+ggsave(file.path(dirs$figures, "CSF_scores_scatter2.pdf"), o2, width = 12, height = 9)
+
+o3 <- ggplot(plot_df,
+       aes(x = CSF_MetCytoskel, y = CSF_ProcedStress, color = Group)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_point(size = 3, alpha = 0.9) +
+  #geom_smooth(method = "lm", se = FALSE, linetype = "dotted") +
+  scale_color_manual(values = c(
+    "Control" = "royalblue3",
+    "MSC no AE no MRI" = "khaki",
+    "MSC + AE no MRI" = "khaki3",
+    "MSC + AE + MRI" = "khaki4"
+  )) +
+  xlim(-1.5,1.5)+
+  ylim(-1.5,1.5)+
+  theme_classic() +
+  labs(
+    y = "CSF Procedural stress",
+    x = "CSF Metabolic/Cytoskeletal",
+    #title = "Decoupling of CSF Metabolic/Cytoskeletal remodelling from inflammatory stress",
+    #subtitle = "MSC induces structural remodeling with variable vascular activation"
+  )+
+  theme(legend.position = 'bottom')
+
+o4 <- ggplot(plot_df,
+       aes(x = CSF_Interface, y = CSF_ProcedStress, color = Group)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_point(size = 3, alpha = 0.9) +
+  #geom_smooth(method = "lm", se = FALSE, linetype = "dotted") +
+  scale_color_manual(values = c(
+    "Control" = "royalblue3",
+    "MSC no AE no MRI" = "khaki",
+    "MSC + AE no MRI" = "khaki3",
+    "MSC + AE + MRI" = "khaki4"
+  )) +
+  xlim(-1.5,1.5)+
+  ylim(-1.5,1.5)+
+  theme_classic() +
+  labs(
+    y = "CSF Procedural stress",
+    x = "CSF interface / ECM remodeling program",
+    #title = "Decoupling of CSF Metabolic/Cytoskeletal remodelling from inflammatory stress",
+    #subtitle = "MSC induces structural remodeling with variable vascular activation"
+  )+
+  theme(legend.position = 'bottom')
+
+o5 <- ggplot(plot_df,
+       aes(x = CSF_Vascular, y = CSF_ProcedStress, color = Group)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4) +
+  geom_point(size = 3, alpha = 0.9) +
+  #geom_smooth(method = "lm", se = FALSE, linetype = "dotted") +
+  scale_color_manual(values = c(
+    "Control" = "royalblue3",
+    "MSC no AE no MRI" = "khaki",
+    "MSC + AE no MRI" = "khaki3",
+    "MSC + AE + MRI" = "khaki4"
+  )) +
+  xlim(-1.5,1.5)+
+  ylim(-1.5,1.5)+
+  theme_classic() +
+  labs(
+    y = "CSF Procedural stress",
+    x = "CSF vascular / inflammatory program",
+    #title = "Decoupling of CSF Metabolic/Cytoskeletal remodelling from inflammatory stress",
+    #subtitle = "MSC induces structural remodeling with variable vascular activation"
+  )+
+  theme(legend.position = 'bottom')
+
+
+ggsave(file.path(dirs$figures, "CSF_scores_scatter3.pdf"), o3, width = 12, height = 9)
+ggsave(file.path(dirs$figures, "CSF_scores_scatter4.pdf"), o4, width = 12, height = 9)
+ggsave(file.path(dirs$figures, "CSF_scores_scatter5.pdf"), o5, width = 12, height = 9)
+
+#modelling and p values
+summary(lm(formula = CSF_Interface ~ CSF_ProcedStress + Treatment, data = plot_df))
+summary(lm(formula = CSF_MetCytoskel ~ CSF_ProcedStress + Treatment, data = plot_df))
+summary(lm(formula = CSF_Vascular ~ CSF_ProcedStress + Treatment, data = plot_df))
+
+```
+
