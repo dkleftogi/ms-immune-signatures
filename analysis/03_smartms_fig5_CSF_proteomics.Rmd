@@ -187,102 +187,33 @@ proiteinFullNames <- df$Description
 
 
 ### Clinical design metadata 
+Participant-level clinical covariates are not distributed in this public repository.
+The full analysis requires a restricted local file with approved access.
+Please request the clinical_covariates_SMART.RData file
+
 ```{r}
 
 ############################### trial info about time points ############################### 
-df_trial_V4 <- data.frame(Patient=cfg$patientLevels_SMART,
-                         Treatment=c('Baseline','Baseline',
-                               'Baseline','Baseline',
-                               'Baseline','Baseline',
-                               'Baseline','Baseline','Baseline',
-                               'Baseline','Baseline',
-                               'Baseline',
-                               'Baseline','Baseline',
-                               'Baseline','Baseline','Baseline',
-                               'Baseline'),
-                       Sex=c('Male','Male',
-                             'Male','Female',
-                             'Female','Female',
-                             'Female','Female',
-                             'Male','Female',
-                             'Male','Male',
-                             'Female','Male',
-                             'Male','Female',
-                             'Female','Female'),
-                       Period=c('0','0',
-                               '0','0',
-                               '0','0',
-                               '0','0','0',
-                               '0','0',
-                               '0',
-                               '0','0',
-                               '0','0','0',
-                               '0'),
-                       Age=c(45,46,
-                             53,42,
-                             49,43,
-                             51,46,
-                             42,41,
-                             52,47,
-                             54,50,
-                             45,40,
-                             48,46),
-                       Sequence=c('Control_first','Control_first',
-                               'MSC_first','MSC_first',
-                               'Control_first','Control_first',
-                               'MSC_first','MSC_first','MSC_first',
-                               'Control_first','Control_first',
-                               'MSC_first',
-                               'Control_first','Control_first',
-                               'MSC_first','MSC_first','MSC_first',
-                               'Control_first'))
+# Participant-level clinical covariates are not distributed in this public repository.
+# The full analysis requires a restricted local file with approved access.
+# Please place the file at:
+clinical_file <- 'clinical_covariates_SMART.RData'
 
-df_trial_V8 <- data.frame(Patient=cfg$patientLevels_SMART,
-                         Treatment=c('Control','Control',
-                               'MSC','MSC',
-                               'Control','Control',
-                               'MSC','MSC','MSC',
-                               'Control','Control',
-                               'MSC',
-                               'Control','Control',
-                               'MSC','MSC','MSC',
-                               'Control'),
-                       Sex=c('Male','Male',
-                             'Male','Female',
-                             'Female','Female',
-                             'Female','Female',
-                             'Male','Female',
-                             'Male','Male',
-                             'Female','Male',
-                             'Male','Female',
-                             'Female','Female'),
-                        Period=c('1','1',
-                               '1','1',
-                               '1','1',
-                               '1','1','1',
-                               '1','1',
-                               '1',
-                               '1','1',
-                               '1','1','1',
-                               '1'),
-                       Age=c(45,46,
-                             53,42,
-                             49,43,
-                             51,46,
-                             42,41,
-                             52,47,
-                             54,50,
-                             45,40,
-                             48,46),
-                       Sequence=c('Control_first','Control_first',
-                               'MSC_first','MSC_first',
-                               'Control_first','Control_first',
-                               'MSC_first','MSC_first','MSC_first',
-                               'Control_first','Control_first',
-                               'MSC_first',
-                               'Control_first','Control_first',
-                               'MSC_first','MSC_first','MSC_first',
-                               'Control_first'))
+if (!file.exists(clinical_file)) {
+  stop(
+    paste(
+      "Restricted clinical covariate file not found:",
+      clinical_file,
+      "\nThis public repository does not include participant-level demographic metadata.",
+      "\nApproved users should obtain the file from the study authors/data custodian",
+      "and place it in the path above before running the full analysis."
+    )
+  )
+}
+
+load('clinical_covariates_SMART.RData')
+
+
 ```
 
 
