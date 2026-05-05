@@ -33,7 +33,9 @@ The project is funded by the following grants awarded to Dimitrios Kleftogiannis
 3. Folder analysis/ contain command-line wrappers as well as markdown versions of the analysis 
 
 ## Data availability
-This repository contains the public analysis code used in the study. Publicly released data are provided separately through Zenodo. Participant-level clinical covariates used in selected adjusted models are not included in this repository.
+This repository contains the public analysis code used in the study. Processed and pseudonymised datasets are deposited in Zenodo (DOI: https://zenodo.org/records/20035817) and are available under embargo during peer review of the manuscript.
+
+Participant-level clinical covariates used in selected adjusted models are not included in this repository.
 
 These covariates are stored separately because linking pseudonymised participant identifiers with demographic metadata may increase re-identification risk. Pseudonymised data are generally still considered personal data under data protection guidance.
 
